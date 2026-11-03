@@ -1,5 +1,5 @@
 @baseUrl = https://localhost:7006/fhir
-@apiKey = dev-medical-kit-key-change-me
+@apiKey = K4Qn9cWKUN3CkoMl5shGrajVGB6s5TLyg95O6aD2TCGAi80Y
 @patientId = 2627530575
 
 ### 1. Capabilities (public, no API key)
