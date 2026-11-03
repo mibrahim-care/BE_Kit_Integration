@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Fakeeh.MedicalKit.Domain/Fakeeh.MedicalKit.Domain.csproj" />
+    <Project Path="src/Fakeeh.MedicalKit.Application/Fakeeh.MedicalKit.Application.csproj" />
+    <Project Path="src/Fakeeh.MedicalKit.Infrastructure/Fakeeh.MedicalKit.Infrastructure.csproj" />
+    <Project Path="src/Fakeeh.MedicalKit.Api/Fakeeh.MedicalKit.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Fakeeh.MedicalKit.UnitTests/Fakeeh.MedicalKit.UnitTests.csproj" />
+  </Folder>
+</Solution>
