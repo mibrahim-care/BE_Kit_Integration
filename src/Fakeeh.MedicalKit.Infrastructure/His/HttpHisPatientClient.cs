@@ -17,11 +17,8 @@ internal sealed class HttpHisPatientClient(
     private const int StatusFound = 1;
     private const int StatusNotFound = 2;
 
-    public Task<PatientDto?> FindByIdentifierAsync(PatientIdentifierType type, string value, CancellationToken cancellationToken) =>
-        LookupAsync(value, cancellationToken);
-
-    public Task<PatientDto?> GetByIdAsync(string patientId, CancellationToken cancellationToken) =>
-        IsIdentifier(patientId) ? LookupAsync(patientId, cancellationToken) : Task.FromResult<PatientDto?>(null);
+    public Task<PatientDto?> FindByNationalIdAsync(string nationalId, CancellationToken cancellationToken) =>
+        LookupAsync(nationalId, cancellationToken);
 
     private async Task<PatientDto?> LookupAsync(string identifier, CancellationToken cancellationToken)
     {
@@ -87,7 +84,6 @@ internal sealed class HttpHisPatientClient(
         return new PatientDto(
             identifier,
             identifier.StartsWith('2') ? PatientIdentifierType.Iqama : PatientIdentifierType.NationalId,
-            identifier,
             NullIfEmpty(patient.MrnNumber) ?? NullIfEmpty(patient.RegistrationNo),
             patient.FirstNameEnglish?.Trim() ?? string.Empty,
             null,
@@ -100,9 +96,6 @@ internal sealed class HttpHisPatientClient(
             null,
             null);
     }
-
-    private static bool IsIdentifier(string value) =>
-        value.Length == 10 && value.All(char.IsAsciiDigit) && (value[0] == '1' || value[0] == '2');
 
     private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -148,4 +141,3 @@ internal sealed class HttpHisPatientClient(
     }
 }
 
-public sealed class HisUnavailableException(string message) : Exception(message);

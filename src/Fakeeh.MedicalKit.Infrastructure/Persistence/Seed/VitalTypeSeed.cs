@@ -10,15 +10,15 @@ internal static class VitalTypeSeed
 
     public static readonly VitalType[] Types =
     [
-        Type("BP", "Blood Pressure", Vital, "85354-9", ObservationModel.Components),
-        Type("HR", "Heart Rate", Vital, "8867-4", ObservationModel.SingleValue),
-        Type("TEMP", "Temperature", Vital, "8310-5", ObservationModel.SingleValue),
-        Type("SPO2", "Oxygen Saturation (SpO2)", Vital, "59408-5", ObservationModel.SingleValue),
-        Type("WEIGHT", "Weight", Vital, "29463-7", ObservationModel.SingleValue),
-        Type("GLUCOSE", "Blood Glucose", Vital, null, ObservationModel.SingleValue),
-        Type("PF", "Peak Flow", Vital, null, ObservationModel.Components),
-        Type("BT", "Blood Test", Lab, null, ObservationModel.PerField),
-        Type("BC", "Body Composition", Vital, null, ObservationModel.PerField)
+        Type("BP", "Blood Pressure", Vital, "85354-9", ObservationModel.Components, "mmHg"),
+        Type("HR", "Heart Rate", Vital, "8867-4", ObservationModel.SingleValue, "bpm"),
+        Type("TEMP", "Temperature", Vital, "8310-5", ObservationModel.SingleValue, "°C"),
+        Type("SPO2", "Oxygen Saturation (SpO2)", Vital, "59408-5", ObservationModel.SingleValue, "%"),
+        Type("WEIGHT", "Weight", Vital, "29463-7", ObservationModel.SingleValue, "kg"),
+        Type("GLUCOSE", "Blood Glucose", Vital, null, ObservationModel.SingleValue, "mg/dL"),
+        Type("PF", "Peak Flow", Vital, null, ObservationModel.Components, "L/min"),
+        Type("BT", "Blood Test", Lab, null, ObservationModel.PerField, "g/dL"),
+        Type("BC", "Body Composition", Vital, null, ObservationModel.PerField, null)
     ];
 
     public static readonly VitalTypeField[] Fields =
@@ -54,7 +54,7 @@ internal static class VitalTypeSeed
         Field(25, "BC", "mineral", "Mineral content", "kg", "kg", null, false, 10)
     ];
 
-    private static VitalType Type(string code, string name, string category, string? loinc, ObservationModel model) =>
+    private static VitalType Type(string code, string name, string category, string? loinc, ObservationModel model, string? unit) =>
         new()
         {
             Code = code,
@@ -62,7 +62,8 @@ internal static class VitalTypeSeed
             IsActive = true,
             Category = category,
             LoincCode = loinc,
-            ObservationModel = model
+            ObservationModel = model,
+            Unit = unit
         };
 
     private static VitalTypeField Field(

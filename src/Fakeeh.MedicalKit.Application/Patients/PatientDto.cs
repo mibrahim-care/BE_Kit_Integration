@@ -8,9 +8,8 @@ public enum PatientIdentifierType
 }
 
 public sealed record PatientDto(
-    string Id,
+    string NationalId,
     PatientIdentifierType IdentifierType,
-    string IdentifierValue,
     string? Mrn,
     string FirstName,
     string? MiddleName,

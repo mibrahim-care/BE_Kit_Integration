@@ -17,6 +17,9 @@ public class VitalType
 
     public string? LoincCode { get; set; }
 
+    /// <summary>The unit the KIT reports for the whole reading (schema.Unit); null when the fields use different units.</summary>
+    public string? Unit { get; set; }
+
     public ObservationModel ObservationModel { get; set; }
 
     public List<VitalTypeField> Fields { get; set; } = [];

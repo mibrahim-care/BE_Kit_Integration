@@ -110,6 +110,9 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("PatientId", "VitalTypeCode");
 
+                    b.HasIndex("NationalId", "VitalTypeCode", "EffectiveAt")
+                        .IsDescending(false, false, true);
+
                     b.ToTable("Readings", (string)null);
                 });
 
@@ -141,6 +144,10 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
 
+                    b.Property<string>("Unit")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
                     b.HasKey("Code");
 
                     b.ToTable("VitalTypes", (string)null);
@@ -153,7 +160,8 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                             IsActive = true,
                             LoincCode = "85354-9",
                             Name = "Blood Pressure",
-                            ObservationModel = "Components"
+                            ObservationModel = "Components",
+                            Unit = "mmHg"
                         },
                         new
                         {
@@ -162,7 +170,8 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                             IsActive = true,
                             LoincCode = "8867-4",
                             Name = "Heart Rate",
-                            ObservationModel = "SingleValue"
+                            ObservationModel = "SingleValue",
+                            Unit = "bpm"
                         },
                         new
                         {
@@ -171,7 +180,8 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                             IsActive = true,
                             LoincCode = "8310-5",
                             Name = "Temperature",
-                            ObservationModel = "SingleValue"
+                            ObservationModel = "SingleValue",
+                            Unit = "°C"
                         },
                         new
                         {
@@ -180,7 +190,8 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                             IsActive = true,
                             LoincCode = "59408-5",
                             Name = "Oxygen Saturation (SpO2)",
-                            ObservationModel = "SingleValue"
+                            ObservationModel = "SingleValue",
+                            Unit = "%"
                         },
                         new
                         {
@@ -189,7 +200,8 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                             IsActive = true,
                             LoincCode = "29463-7",
                             Name = "Weight",
-                            ObservationModel = "SingleValue"
+                            ObservationModel = "SingleValue",
+                            Unit = "kg"
                         },
                         new
                         {
@@ -197,7 +209,8 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                             Category = "vital-signs",
                             IsActive = true,
                             Name = "Blood Glucose",
-                            ObservationModel = "SingleValue"
+                            ObservationModel = "SingleValue",
+                            Unit = "mg/dL"
                         },
                         new
                         {
@@ -205,7 +218,8 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                             Category = "vital-signs",
                             IsActive = true,
                             Name = "Peak Flow",
-                            ObservationModel = "Components"
+                            ObservationModel = "Components",
+                            Unit = "L/min"
                         },
                         new
                         {
@@ -213,7 +227,8 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                             Category = "laboratory",
                             IsActive = true,
                             Name = "Blood Test",
-                            ObservationModel = "PerField"
+                            ObservationModel = "PerField",
+                            Unit = "g/dL"
                         },
                         new
                         {

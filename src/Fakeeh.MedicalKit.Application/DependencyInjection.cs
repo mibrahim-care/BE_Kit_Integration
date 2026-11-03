@@ -7,7 +7,7 @@ namespace Fakeeh.MedicalKit.Application;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddApplication(this IServiceCollection services)
+    public static IServiceCollection AddApplication(this IServiceCollection services, ReadingSettings? readingSettings = null)
     {
         var assembly = typeof(DependencyInjection).Assembly;
 
@@ -19,7 +19,7 @@ public static class DependencyInjection
         });
 
         services.AddValidatorsFromAssembly(assembly, includeInternalTypes: true);
-        services.AddScoped<VitalTypeResolver>();
+        services.AddSingleton(readingSettings ?? new ReadingSettings());
 
         return services;
     }

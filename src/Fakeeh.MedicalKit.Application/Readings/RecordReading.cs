@@ -1,6 +1,5 @@
-using System.Globalization;
-using System.Text.RegularExpressions;
 using Fakeeh.MedicalKit.Application.Abstractions;
+using Fakeeh.MedicalKit.Application.Common;
 using Fakeeh.MedicalKit.Domain.Common;
 using Fakeeh.MedicalKit.Domain.Entities;
 using FluentValidation;
@@ -8,94 +7,108 @@ using MediatR;
 
 namespace Fakeeh.MedicalKit.Application.Readings;
 
-public sealed record RecordReadingCommand(ReadingInputDto Reading) : IRequest<Result<RecordReadingResult>>;
+/// <summary>Validates and stores one KIT reading. Used by <see cref="AddVitalsCommand"/> for each payload.</summary>
+public sealed record RecordReadingCommand(VitalInput Reading) : IRequest<Result<RecordReadingResult>>;
 
-internal sealed partial class RecordReadingCommandValidator : AbstractValidator<RecordReadingCommand>
+internal sealed class RecordReadingCommandValidator : AbstractValidator<RecordReadingCommand>
 {
-    private static readonly string[] AllowedStatuses = ["final", "amended", "corrected", "preliminary"];
-
-    public RecordReadingCommandValidator()
+    public RecordReadingCommandValidator(ReadingSettings settings)
     {
-        RuleFor(c => c.Reading.ExternalId)
-            .NotEmpty().WithErrorCode("reading.identifier_required")
-            .WithMessage("Observation.identifier (the KIT reading id) is required.")
-            .MaximumLength(200).WithErrorCode("reading.identifier_too_long")
-            .OverridePropertyName("identifier");
+        RuleFor(c => c.Reading.NationalId).NationalId();
 
-        RuleFor(c => c.Reading.PatientId)
-            .NotEmpty().WithErrorCode("reading.subject_required")
-            .WithMessage("Observation.subject must reference a patient as Patient/{id}.")
-            .OverridePropertyName("subject");
+        RuleFor(c => c.Reading.ReadingId)
+            .MaximumLength(200).WithErrorCode("reading.reading_id_too_long")
+            .OverridePropertyName("readingId");
 
-        RuleFor(c => c.Reading.EffectiveDateTime)
-            .NotEmpty().WithErrorCode("reading.effective_required")
-            .WithMessage("Observation.effectiveDateTime (when the reading was taken) is required.")
-            .Must(HaveTimeZone).WithErrorCode("reading.effective_timezone")
-            .WithMessage("Observation.effectiveDateTime must be a full date-time with a time zone, e.g. 2026-10-18T07:58:42+03:00.")
-            .OverridePropertyName("effectiveDateTime");
+        RuleFor(c => c.Reading.VitalTypeCode)
+            .NotEmpty().WithErrorCode("reading.vital_type_required")
+            .WithMessage("vitalTypeCode is required.")
+            .OverridePropertyName("vitalTypeCode");
 
-        RuleFor(c => c.Reading)
-            .Must(r => !string.IsNullOrWhiteSpace(r.VitalTypeCode) || !string.IsNullOrWhiteSpace(r.LoincCode))
-            .WithErrorCode("reading.vital_type_required")
-            .WithMessage("The Observation code must include a vital-type code or a LOINC code.")
-            .OverridePropertyName("code");
+        RuleFor(c => c.Reading.ReadingValues)
+            .Must(v => v is { Count: > 0 }).WithErrorCode("reading.values_required")
+            .WithMessage("readingValues must contain at least one value.")
+            .OverridePropertyName("readingValues");
 
-        RuleFor(c => c.Reading)
-            .Must(r => r.Value is not null || r.Components.Count > 0)
-            .WithErrorCode("reading.value_required")
-            .WithMessage("The Observation must have a valueQuantity or components.")
-            .OverridePropertyName("value[x]");
+        RuleFor(c => c.Reading.DateTime)
+            .Must(v => KitDateTime.TryParse(v, settings.DefaultTimeZoneOffset, out _))
+            .When(c => !string.IsNullOrWhiteSpace(c.Reading.DateTime))
+            .WithErrorCode("reading.date_time_invalid")
+            .WithMessage("dateTime must be an ISO 8601 date-time, e.g. 2026-10-18T07:58:42 or 2026-10-18T07:58:42+03:00.")
+            .OverridePropertyName("dateTime");
 
-        RuleFor(c => c.Reading.Status)
-            .Must(s => s is null || AllowedStatuses.Contains(s))
-            .WithErrorCode("reading.status_invalid")
-            .WithMessage($"Observation.status must be one of: {string.Join(", ", AllowedStatuses)}.")
-            .OverridePropertyName("status");
-
-        RuleFor(c => c.Reading.Note).MaximumLength(2000).OverridePropertyName("note");
-        RuleFor(c => c.Reading.Address).MaximumLength(500).OverridePropertyName("extension[address]");
+        RuleFor(c => c.Reading.Notes).MaximumLength(2000).OverridePropertyName("notes");
+        RuleFor(c => c.Reading.Address).MaximumLength(500).OverridePropertyName("address");
+        RuleFor(c => c.Reading.DeviceId).MaximumLength(200).OverridePropertyName("deviceId");
+        RuleFor(c => c.Reading.NurseId).MaximumLength(200).OverridePropertyName("nurseId");
     }
-
-    internal static bool HaveTimeZone(string? value) =>
-        value is not null
-        && TimeZoneRegex().IsMatch(value)
-        && DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
-
-    [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$")]
-    private static partial Regex TimeZoneRegex();
 }
 
 internal sealed class RecordReadingCommandHandler(
     IReadingRepository readings,
+    IVitalTypeRepository vitalTypes,
     IUnitOfWork unitOfWork,
     IHisPatientClient hisClient,
-    VitalTypeResolver resolver,
+    ReadingSettings settings,
     IClock clock)
     : IRequestHandler<RecordReadingCommand, Result<RecordReadingResult>>
 {
     public async Task<Result<RecordReadingResult>> Handle(RecordReadingCommand request, CancellationToken cancellationToken)
     {
         var input = request.Reading;
+        var readingId = string.IsNullOrWhiteSpace(input.ReadingId) ? Guid.NewGuid().ToString() : input.ReadingId.Trim();
 
-        var existing = await readings.GetByExternalIdAsync(input.ExternalId, cancellationToken);
+        var existing = await readings.GetByExternalIdAsync(readingId, cancellationToken);
         if (existing is not null)
         {
-            return new RecordReadingResult(existing.Id, RecordReadingOutcome.AlreadyExists);
+            return new RecordReadingResult(existing.Id, readingId, RecordReadingOutcome.AlreadyExists);
         }
 
-        var resolved = await resolver.ResolveAsync(input, cancellationToken);
-        if (resolved.IsFailure)
+        var type = await vitalTypes.GetByCodeAsync(input.VitalTypeCode!, cancellationToken);
+        if (type is null)
         {
-            return Result.Failure<RecordReadingResult>(resolved.Errors);
+            return ReadingErrors.UnknownVitalType(input.VitalTypeCode);
         }
 
-        var patient = await hisClient.GetByIdAsync(input.PatientId, cancellationToken);
+        var components = ResolveValues(type, input.ReadingValues!);
+        if (components.IsFailure)
+        {
+            return Result.Failure<RecordReadingResult>(components.Errors);
+        }
+
+        var patient = await hisClient.FindByNationalIdAsync(input.NationalId!, cancellationToken);
         if (patient is null)
         {
-            return ReadingErrors.PatientNotFound(input.PatientId);
+            return ReadingErrors.PatientNotFound(input.NationalId!);
         }
 
-        var reading = BuildReading(input, resolved.Value, patient.IdentifierValue);
+        var now = clock.UtcNow;
+        var reading = new Reading
+        {
+            Id = Guid.NewGuid(),
+            ExternalId = readingId,
+            PatientId = patient.NationalId,
+            NationalId = patient.NationalId,
+            VitalTypeCode = type.Code,
+            Category = type.Category,
+            Status = "final",
+            EffectiveAt = KitDateTime.TryParse(input.DateTime, settings.DefaultTimeZoneOffset, out var takenAt)
+                ? takenAt
+                : now.ToOffset(settings.DefaultTimeZoneOffset),
+            Components = components.Value,
+            Interpretation = input.IsAbnormal switch
+            {
+                true => "A",
+                false => "N",
+                null => null
+            },
+            Note = NullIfEmpty(input.Notes),
+            Address = NullIfEmpty(input.Address),
+            DeviceRef = NullIfEmpty(input.DeviceId),
+            PerformerRef = NullIfEmpty(input.NurseId),
+            ReceivedAt = now
+        };
+
         readings.Add(reading);
 
         try
@@ -104,53 +117,68 @@ internal sealed class RecordReadingCommandHandler(
         }
         catch (DuplicateKeyException)
         {
-            var winner = await readings.GetByExternalIdAsync(input.ExternalId, cancellationToken);
+            var winner = await readings.GetByExternalIdAsync(readingId, cancellationToken);
             if (winner is null)
             {
                 throw;
             }
 
-            return new RecordReadingResult(winner.Id, RecordReadingOutcome.AlreadyExists);
+            return new RecordReadingResult(winner.Id, readingId, RecordReadingOutcome.AlreadyExists);
         }
 
-        return new RecordReadingResult(reading.Id, RecordReadingOutcome.Created);
+        return new RecordReadingResult(reading.Id, readingId, RecordReadingOutcome.Created);
     }
 
-    private Reading BuildReading(ReadingInputDto input, ResolvedReading resolved, string nationalId)
+    private static Result<List<ReadingComponent>> ResolveValues(VitalType type, IReadOnlyDictionary<string, decimal?> values)
     {
-        var type = resolved.VitalType;
-        var field = resolved.Field;
+        var errors = new List<Error>();
+        var components = new List<(VitalTypeField Field, decimal Value)>();
 
-        return new Reading
+        foreach (var (key, value) in values)
         {
-            Id = Guid.NewGuid(),
-            ExternalId = input.ExternalId,
-            PatientId = input.PatientId,
-            NationalId = nationalId,
-            VitalTypeCode = type.Code,
-            FieldKey = type.ObservationModel == Domain.Enums.ObservationModel.PerField ? field?.Key : null,
-            Category = type.Category,
-            Status = input.Status ?? "final",
-            EffectiveAt = DateTimeOffset.Parse(input.EffectiveDateTime!, CultureInfo.InvariantCulture),
-            Value = resolved.Value,
-            Unit = field?.Unit,
-            UcumCode = field?.UcumCode,
-            Components = resolved.Components
-                .Select(c => new ReadingComponent
-                {
-                    FieldKey = c.Field.Key,
-                    LoincCode = c.Field.LoincCode,
-                    Value = c.Value,
-                    Unit = c.Field.Unit,
-                    UcumCode = c.Field.UcumCode
-                })
-                .ToList(),
-            Interpretation = input.Interpretation,
-            Note = input.Note,
-            Address = input.Address,
-            PerformerRef = input.PerformerRef,
-            DeviceRef = input.DeviceRef,
-            ReceivedAt = clock.UtcNow
-        };
+            var field = type.FindField(key);
+            if (field is null)
+            {
+                errors.Add(ReadingErrors.UnknownField(type.Code, key));
+                continue;
+            }
+
+            if (components.Any(c => c.Field.Key == field.Key))
+            {
+                errors.Add(ReadingErrors.DuplicateField(field.Key));
+                continue;
+            }
+
+            if (value is null)
+            {
+                errors.Add(ReadingErrors.ValueRequired(field.Key));
+                continue;
+            }
+
+            components.Add((field, value.Value));
+        }
+
+        errors.AddRange(type.Fields
+            .Where(f => f.Required && components.All(c => c.Field.Key != f.Key))
+            .Select(f => ReadingErrors.MissingRequiredField(type.Code, f.Key)));
+
+        if (errors.Count > 0)
+        {
+            return Result.Failure<List<ReadingComponent>>(errors);
+        }
+
+        return components
+            .OrderBy(c => c.Field.SortOrder)
+            .Select(c => new ReadingComponent
+            {
+                FieldKey = c.Field.Key,
+                LoincCode = c.Field.LoincCode,
+                Value = c.Value,
+                Unit = c.Field.Unit,
+                UcumCode = c.Field.UcumCode
+            })
+            .ToList();
     }
+
+    private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

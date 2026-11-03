@@ -36,6 +36,7 @@ internal sealed class ReadingConfiguration : IEntityTypeConfiguration<Reading>
         builder.HasIndex(r => r.ExternalId).IsUnique();
         builder.HasIndex(r => new { r.PatientId, r.EffectiveAt }).IsDescending(false, true);
         builder.HasIndex(r => new { r.PatientId, r.VitalTypeCode });
+        builder.HasIndex(r => new { r.NationalId, r.VitalTypeCode, r.EffectiveAt }).IsDescending(false, false, true);
 
         builder.OwnsMany(r => r.Components, component =>
         {

@@ -1,79 +1,33 @@
+using Fakeeh.MedicalKit.Application.Common;
+
 namespace Fakeeh.MedicalKit.Application.Readings;
 
-public sealed record ReadingInputDto
+/// <summary>One KIT reading, in the KIT's own payload format.</summary>
+public sealed record VitalInput
 {
-    public string ExternalId { get; init; } = string.Empty;
+    /// <summary>The KIT's unique id for this reading. Re-sending the same id does not create a duplicate.</summary>
+    public string? ReadingId { get; init; }
 
-    public string PatientId { get; init; } = string.Empty;
+    public string? NationalId { get; init; }
 
     public string? VitalTypeCode { get; init; }
 
-    public string? FieldKey { get; init; }
+    /// <summary>Field key → value, e.g. { "systolic": 121, "diastolic": 81 } or { "Value": 37.5 }.</summary>
+    public Dictionary<string, decimal?>? ReadingValues { get; init; }
 
-    public string? LoincCode { get; init; }
+    /// <summary>When the reading was taken. Without a UTC offset, the configured offset (+03:00) is assumed. Defaults to the time it is received.</summary>
+    public string? DateTime { get; init; }
 
-    public string? Status { get; init; }
+    public bool? IsAbnormal { get; init; }
 
-    public string? EffectiveDateTime { get; init; }
-
-    public decimal? Value { get; init; }
-
-    public string? Unit { get; init; }
-
-    public string? UcumCode { get; init; }
-
-    public IReadOnlyList<ReadingComponentInputDto> Components { get; init; } = [];
-
-    public string? Interpretation { get; init; }
-
-    public string? Note { get; init; }
+    public string? Notes { get; init; }
 
     public string? Address { get; init; }
 
-    public string? PerformerRef { get; init; }
+    public string? DeviceId { get; init; }
 
-    public string? DeviceRef { get; init; }
+    public string? NurseId { get; init; }
 }
-
-public sealed record ReadingComponentInputDto(
-    string? FieldKey,
-    string? LoincCode,
-    decimal? Value,
-    string? Unit,
-    string? UcumCode);
-
-public sealed record ReadingDto(
-    Guid Id,
-    string ExternalId,
-    string PatientId,
-    string? NationalId,
-    string VitalTypeCode,
-    string VitalTypeName,
-    string? VitalTypeLoincCode,
-    string? FieldKey,
-    string? FieldLabel,
-    string? FieldLoincCode,
-    string Category,
-    string Status,
-    DateTimeOffset EffectiveAt,
-    decimal? Value,
-    string? Unit,
-    string? UcumCode,
-    IReadOnlyList<ReadingComponentDto> Components,
-    string? Interpretation,
-    string? Note,
-    string? Address,
-    string? PerformerRef,
-    string? DeviceRef,
-    DateTimeOffset ReceivedAt);
-
-public sealed record ReadingComponentDto(
-    string FieldKey,
-    string Label,
-    string? LoincCode,
-    decimal Value,
-    string Unit,
-    string UcumCode);
 
 public enum RecordReadingOutcome
 {
@@ -81,4 +35,52 @@ public enum RecordReadingOutcome
     AlreadyExists
 }
 
-public sealed record RecordReadingResult(Guid Id, RecordReadingOutcome Outcome);
+public sealed record RecordReadingResult(Guid Id, string ReadingId, RecordReadingOutcome Outcome);
+
+public enum VitalResultStatus
+{
+    Created,
+    AlreadyExists,
+    Failed
+}
+
+public sealed record VitalResultDto(
+    int Index,
+    string? ReadingId,
+    string? VitalTypeCode,
+    VitalResultStatus Status,
+    Guid? Id,
+    IReadOnlyList<ErrorDto>? Errors);
+
+public sealed record AddVitalsResultDto(
+    int Total,
+    int Created,
+    int AlreadyExisted,
+    int Failed,
+    IReadOnlyList<VitalResultDto> Results);
+
+public sealed record LatestVitalsDto(
+    string NationalId,
+    int RecordsPerType,
+    IReadOnlyList<VitalTypeReadingsDto> VitalTypes);
+
+public sealed record VitalTypeReadingsDto(
+    string VitalTypeCode,
+    string VitalTypeName,
+    string? Unit,
+    IReadOnlyList<VitalFieldDto> Fields,
+    IReadOnlyList<VitalReadingDto> Readings);
+
+public sealed record VitalFieldDto(string Key, string Label, string Unit);
+
+public sealed record VitalReadingDto(
+    Guid Id,
+    string ReadingId,
+    DateTimeOffset DateTime,
+    IReadOnlyDictionary<string, decimal> Values,
+    bool? IsAbnormal,
+    string? Notes,
+    string? Address,
+    string? DeviceId,
+    string? NurseId,
+    DateTimeOffset ReceivedAt);

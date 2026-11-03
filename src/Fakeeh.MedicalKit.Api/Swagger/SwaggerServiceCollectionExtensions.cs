@@ -1,5 +1,4 @@
 using Fakeeh.MedicalKit.Api.Security;
-using Hl7.Fhir.Model;
 using Microsoft.OpenApi;
 
 namespace Fakeeh.MedicalKit.Api.Swagger;
@@ -15,18 +14,9 @@ public static class SwaggerServiceCollectionExtensions
         {
             options.SwaggerDoc("v1", new OpenApiInfo
             {
-                Title = "Fakeeh Medical Kit FHIR API",
+                Title = "Fakeeh Medical Kit API",
                 Version = "v1",
-                Description = "FHIR R4 integration API. Endpoints under /fhir (except /fhir/metadata) require the X-Api-Key header."
-            });
-
-            // The HL7 FHIR model is a large, cyclic, polymorphic type graph; describing it as a
-            // plain JSON object keeps generation fast and lets clients send any FHIR resource.
-            options.MapType<Resource>(() => new OpenApiSchema
-            {
-                Type = JsonSchemaType.Object,
-                Description = "A FHIR R4 resource (JSON). Must include 'resourceType'.",
-                AdditionalPropertiesAllowed = true
+                Description = "Integration API for the Medical KIT. Every endpoint is a POST with a JSON body and requires the X-Api-Key header."
             });
 
             options.AddSecurityDefinition(ApiKeySchemeId, new OpenApiSecurityScheme
@@ -51,7 +41,7 @@ public static class SwaggerServiceCollectionExtensions
         app.UseSwagger();
         app.UseSwaggerUI(options =>
         {
-            options.SwaggerEndpoint("/swagger/v1/swagger.json", "Fakeeh Medical Kit FHIR API v1");
+            options.SwaggerEndpoint("/swagger/v1/swagger.json", "Fakeeh Medical Kit API v1");
             options.DocumentTitle = "Fakeeh Medical Kit API";
         });
 

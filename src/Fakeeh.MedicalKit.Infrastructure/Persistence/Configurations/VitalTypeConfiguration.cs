@@ -16,6 +16,7 @@ internal sealed class VitalTypeConfiguration : IEntityTypeConfiguration<VitalTyp
         builder.Property(t => t.Name).HasMaxLength(100).IsRequired();
         builder.Property(t => t.Category).HasMaxLength(30).IsRequired();
         builder.Property(t => t.LoincCode).HasMaxLength(20);
+        builder.Property(t => t.Unit).HasMaxLength(20);
         builder.Property(t => t.ObservationModel).HasConversion<string>().HasMaxLength(20);
 
         builder.HasMany(t => t.Fields)

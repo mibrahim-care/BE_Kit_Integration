@@ -1,16 +1,20 @@
-using Fakeeh.MedicalKit.Application.Common;
-using Fakeeh.MedicalKit.Application.Readings;
 using Fakeeh.MedicalKit.Domain.Entities;
 
 namespace Fakeeh.MedicalKit.Application.Abstractions;
 
 public interface IReadingRepository
 {
-    Task<Reading?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
-
     Task<Reading?> GetByExternalIdAsync(string externalId, CancellationToken cancellationToken);
 
     void Add(Reading reading);
 
-    Task<PagedList<Reading>> SearchAsync(ReadingSearchCriteria criteria, CancellationToken cancellationToken);
+    /// <summary>Returns, for each vital type, the newest <paramref name="criteria"/>.RecordsPerType readings of the patient.</summary>
+    Task<IReadOnlyList<Reading>> GetLatestPerTypeAsync(LatestReadingsCriteria criteria, CancellationToken cancellationToken);
 }
+
+public sealed record LatestReadingsCriteria(
+    string NationalId,
+    int RecordsPerType,
+    string? VitalTypeCode,
+    DateTimeOffset? From,
+    DateTimeOffset? To);

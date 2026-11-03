@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
-using Fakeeh.MedicalKit.Api.Fhir;
-using Hl7.Fhir.Model;
+using Fakeeh.MedicalKit.Api.Http;
 using Microsoft.Extensions.Options;
 
 namespace Fakeeh.MedicalKit.Api.Security;
@@ -21,9 +20,9 @@ public sealed class ApiClient
     public string Key { get; set; } = string.Empty;
 }
 
-public sealed class ApiKeyMiddleware(RequestDelegate next, IOptionsMonitor<ApiKeyOptions> options, FhirResponseWriter writer)
+public sealed class ApiKeyMiddleware(RequestDelegate next, IOptionsMonitor<ApiKeyOptions> options)
 {
-    public async System.Threading.Tasks.Task InvokeAsync(HttpContext context)
+    public async Task InvokeAsync(HttpContext context)
     {
         if (!RequiresKey(context.Request))
         {
@@ -40,10 +39,8 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptionsMonitor<ApiKe
                 ? $"Missing {ApiKeyOptions.HeaderName} header."
                 : $"Invalid {ApiKeyOptions.HeaderName} header.";
 
-            await writer.WriteAsync(
-                context,
-                OperationOutcomes.Single(OperationOutcome.IssueType.Security, message, code: "security.api_key"),
-                StatusCodes.Status401Unauthorized);
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsJsonAsync(ErrorResponse.Single("security.api_key", message), context.RequestAborted);
             return;
         }
 
@@ -52,9 +49,7 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptionsMonitor<ApiKe
     }
 
     private static bool RequiresKey(HttpRequest request) =>
-        !HttpMethods.IsOptions(request.Method)
-        && request.Path.StartsWithSegments("/fhir")
-        && !request.Path.StartsWithSegments("/fhir/metadata");
+        !HttpMethods.IsOptions(request.Method) && request.Path.StartsWithSegments("/api");
 
     private ApiClient? FindClient(string provided)
     {

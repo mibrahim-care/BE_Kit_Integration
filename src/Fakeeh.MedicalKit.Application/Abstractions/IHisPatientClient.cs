@@ -4,7 +4,6 @@ namespace Fakeeh.MedicalKit.Application.Abstractions;
 
 public interface IHisPatientClient
 {
-    Task<PatientDto?> FindByIdentifierAsync(PatientIdentifierType type, string value, CancellationToken cancellationToken);
-
-    Task<PatientDto?> GetByIdAsync(string patientId, CancellationToken cancellationToken);
+    /// <summary>Looks a patient up in HIS by national ID or Iqama number. Returns null when HIS has no such patient.</summary>
+    Task<PatientDto?> FindByNationalIdAsync(string nationalId, CancellationToken cancellationToken);
 }

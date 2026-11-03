@@ -1,295 +1,74 @@
-@baseUrl = https://localhost:7006/fhir
+@baseUrl = https://localhost:7006/api/MedicalKit
 @apiKey = K4Qn9cWKUN3CkoMl5shGrajVGB6s5TLyg95O6aD2TCGAi80Y
-@patientId = 2627530575
+@nationalId = 2627530575
 
-### 1. Capabilities (public, no API key)
-GET {{baseUrl}}/metadata
-Accept: application/fhir+json
+### 1. Missing API key -> 401
+POST {{baseUrl}}/GetPatientInfo
+Content-Type: application/json
 
-### 2. Missing API key -> 401 OperationOutcome
-GET {{baseUrl}}/Patient?identifier=http://nphies.sa/identifier/nationalid|1123456781
-Accept: application/fhir+json
+{ "nationalId": "{{nationalId}}" }
 
-### 3. Patient by national ID (set a real HIS national ID) -> Bundle with 1 entry
-GET {{baseUrl}}/Patient?identifier=http://nphies.sa/identifier/nationalid|1123456781
-Accept: application/fhir+json
+### 2. Get patient info
+POST {{baseUrl}}/GetPatientInfo
+Content-Type: application/json
 X-Api-Key: {{apiKey}}
 
-### 4. Patient by Iqama -> Bundle with 1 entry
-GET {{baseUrl}}/Patient?identifier=http://nphies.sa/identifier/iqama|2627530575
-Accept: application/fhir+json
+{ "nationalId": "{{nationalId}}" }
+
+### 3. Unknown patient -> 404
+POST {{baseUrl}}/GetPatientInfo
+Content-Type: application/json
 X-Api-Key: {{apiKey}}
 
-### 5. Unknown national ID -> empty Bundle (total 0), not 404
-GET {{baseUrl}}/Patient?identifier=http://nphies.sa/identifier/nationalid|1000000000
-Accept: application/fhir+json
-X-Api-Key: {{apiKey}}
+{ "nationalId": "1000000000" }
 
-### 6. Patient read by id
-GET {{baseUrl}}/Patient/{{patientId}}
-Accept: application/fhir+json
-X-Api-Key: {{apiKey}}
-
-### 7. Vital types CodeSystem
-GET {{baseUrl}}/CodeSystem/medical-kit-vital-type
-Accept: application/fhir+json
-X-Api-Key: {{apiKey}}
-
-### 8. Send readings as a batch Bundle (all 9 types from docs/Vital Types.md)
-POST {{baseUrl}}
-Content-Type: application/fhir+json
-Accept: application/fhir+json
+### 4. Add vitals (one reading of every type, KIT format)
+POST {{baseUrl}}/AddVitals
+Content-Type: application/json
 X-Api-Key: {{apiKey}}
 
 {
-  "resourceType": "Bundle",
-  "type": "batch",
-  "entry": [
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-BP-0001" }],
-        "status": "final",
-        "category": [{ "coding": [{ "system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "vital-signs" }] }],
-        "code": {
-          "coding": [
-            { "system": "http://loinc.org", "code": "85354-9", "display": "Blood pressure panel" },
-            { "system": "http://fakeeh.example/medical-kit/vital-type", "code": "BP" }
-          ],
-          "text": "Blood Pressure"
-        },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "performer": [{ "reference": "Practitioner/3" }],
-        "component": [
-          {
-            "code": { "coding": [{ "system": "http://loinc.org", "code": "8480-6" }] },
-            "valueQuantity": { "value": 121, "unit": "mmHg", "system": "http://unitsofmeasure.org", "code": "mm[Hg]" }
-          },
-          {
-            "code": { "coding": [{ "system": "http://loinc.org", "code": "8462-4" }] },
-            "valueQuantity": { "value": 81, "unit": "mmHg", "system": "http://unitsofmeasure.org", "code": "mm[Hg]" }
-          }
-        ],
-        "note": [{ "text": "قراءة ضغط الدم من جهاز الموبايل" }],
-        "extension": [{ "url": "http://fakeeh.example/fhir/StructureDefinition/reading-address", "valueString": "السعوديه , الرياض" }]
-      },
-      "request": { "method": "POST", "url": "Observation", "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-DEMO-BP-0001" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-HR-0001" }],
-        "status": "final",
-        "code": { "coding": [{ "system": "http://loinc.org", "code": "8867-4" }, { "system": "http://fakeeh.example/medical-kit/vital-type", "code": "HR" }] },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 119, "unit": "bpm", "system": "http://unitsofmeasure.org", "code": "/min" },
-        "interpretation": [{ "coding": [{ "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation", "code": "H" }] }]
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-SPO2-0001" }],
-        "status": "final",
-        "code": { "coding": [{ "system": "http://loinc.org", "code": "59408-5" }, { "system": "http://fakeeh.example/medical-kit/vital-type", "code": "SPO2" }] },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 70, "unit": "%", "system": "http://unitsofmeasure.org", "code": "%" },
-        "interpretation": [{ "coding": [{ "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation", "code": "L" }] }]
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-TEMP-0001" }],
-        "status": "final",
-        "code": { "coding": [{ "system": "http://fakeeh.example/medical-kit/vital-type", "code": "TEMP" }] },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 37.5, "unit": "°C", "system": "http://unitsofmeasure.org", "code": "Cel" }
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-WEIGHT-0001" }],
-        "status": "final",
-        "code": { "coding": [{ "system": "http://fakeeh.example/medical-kit/vital-type", "code": "WEIGHT" }] },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 90, "unit": "kg", "system": "http://unitsofmeasure.org", "code": "kg" }
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-GLUCOSE-0001" }],
-        "status": "final",
-        "code": { "coding": [{ "system": "http://fakeeh.example/medical-kit/vital-type", "code": "GLUCOSE" }] },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 9, "unit": "mg/dL", "system": "http://unitsofmeasure.org", "code": "mg/dL" }
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-GLUCOSE-0001" }],
-        "status": "final",
-        "code": { "coding": [{ "system": "http://fakeeh.example/medical-kit/vital-type", "code": "GLUCOSE" }] },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 9, "unit": "mg/dL", "system": "http://unitsofmeasure.org", "code": "mg/dL" }
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-PF-0001" }],
-        "status": "final",
-        "code": { "coding": [{ "system": "http://fakeeh.example/medical-kit/vital-type", "code": "PF" }] },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "component": [
-          {
-            "code": { "coding": [{ "system": "http://fakeeh.example/medical-kit/vital-field", "code": "per_min" }] },
-            "valueQuantity": { "value": 13, "unit": "L/min", "system": "http://unitsofmeasure.org", "code": "L/min" }
-          },
-          {
-            "code": { "coding": [{ "system": "http://fakeeh.example/medical-kit/vital-field", "code": "fev1_l" }] },
-            "valueQuantity": { "value": 6, "unit": "L", "system": "http://unitsofmeasure.org", "code": "L" }
-          }
-        ]
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-BT-HB-0001" }],
-        "status": "final",
-        "category": [{ "coding": [{ "system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "laboratory" }] }],
-        "code": {
-          "coding": [
-            { "system": "http://loinc.org", "code": "718-7" },
-            { "system": "http://fakeeh.example/medical-kit/vital-type", "code": "BT" },
-            { "system": "http://fakeeh.example/medical-kit/vital-field", "code": "hb_gdL" }
-          ]
-        },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 13, "unit": "g/dL", "system": "http://unitsofmeasure.org", "code": "g/dL" },
-        "note": [{ "text": "قراءة فحص دم من جهاز الموبايل" }]
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-BT-NA-0001" }],
-        "status": "final",
-        "code": {
-          "coding": [
-            { "system": "http://fakeeh.example/medical-kit/vital-type", "code": "BT" },
-            { "system": "http://fakeeh.example/medical-kit/vital-field", "code": "na_mmoll" }
-          ]
-        },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 13, "unit": "mmol/L", "system": "http://unitsofmeasure.org", "code": "mmol/L" }
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-BC-BMI-0001" }],
-        "status": "final",
-        "code": {
-          "coding": [
-            { "system": "http://loinc.org", "code": "39156-5" },
-            { "system": "http://fakeeh.example/medical-kit/vital-type", "code": "BC" },
-            { "system": "http://fakeeh.example/medical-kit/vital-field", "code": "bmi" }
-          ]
-        },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 27.4, "unit": "kg/m²", "system": "http://unitsofmeasure.org", "code": "kg/m2" }
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-BC-VF-0001" }],
-        "status": "final",
-        "code": {
-          "coding": [
-            { "system": "http://fakeeh.example/medical-kit/vital-type", "code": "BC" },
-            { "system": "http://fakeeh.example/medical-kit/vital-field", "code": "visceral_fat" }
-          ]
-        },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42+03:00",
-        "valueQuantity": { "value": 20, "unit": "level", "system": "http://unitsofmeasure.org", "code": "{level}" }
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    },
-    {
-      "resource": {
-        "resourceType": "Observation",
-        "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-NO-TZ-0001" }],
-        "status": "final",
-        "code": { "coding": [{ "system": "http://fakeeh.example/medical-kit/vital-type", "code": "HR" }] },
-        "subject": { "reference": "Patient/{{patientId}}" },
-        "effectiveDateTime": "2026-10-18T07:58:42.63689",
-        "valueQuantity": { "value": 80, "unit": "bpm", "system": "http://unitsofmeasure.org", "code": "/min" }
-      },
-      "request": { "method": "POST", "url": "Observation" }
-    }
+  "payloads": [
+    { "readingId": "KIT-DEMO-BT-0001", "vitalTypeCode": "BT", "nationalId": "{{nationalId}}", "dateTime": "2026-10-18T07:58:42",
+      "readingValues": { "hb_gdL": 13, "glucometer_mgdL": 50, "lactate_mmoll": 11, "ketone_mmoll": 22, "na_mmoll": 13, "k_mmoll": 20 },
+      "notes": "قراءة فحص دم من جهاز الموبايل", "address": "السعوديه , الرياض" },
+    { "readingId": "KIT-DEMO-BC-0001", "vitalTypeCode": "BC", "nationalId": "{{nationalId}}", "dateTime": "2026-10-18T07:58:42",
+      "readingValues": { "bmi": 27.4, "body_fat": 10, "body_fat_percentage": 5, "body_water_percentage": 60, "visceral_fat": 20, "skeletal_muscle": 30, "resting_metabolism": 4, "basal_metabolic_rate": 19, "protein_levels": 11, "mineral": 10 } },
+    { "readingId": "KIT-DEMO-BP-0001", "vitalTypeCode": "BP", "nationalId": "{{nationalId}}", "dateTime": "2026-10-18T07:58:42",
+      "readingValues": { "systolic": 121, "diastolic": 81 }, "isAbnormal": false, "nurseId": "3" },
+    { "readingId": "KIT-DEMO-HR-0001", "vitalTypeCode": "HR", "nationalId": "{{nationalId}}", "dateTime": "2026-10-18T07:58:42",
+      "readingValues": { "Value": 119 }, "isAbnormal": true },
+    { "readingId": "KIT-DEMO-SPO2-0001", "vitalTypeCode": "SPO2", "nationalId": "{{nationalId}}", "dateTime": "2026-10-18T07:58:42",
+      "readingValues": { "Value": 70 }, "isAbnormal": true },
+    { "readingId": "KIT-DEMO-TEMP-0001", "vitalTypeCode": "TEMP", "nationalId": "{{nationalId}}", "dateTime": "2026-10-18T07:58:42",
+      "readingValues": { "Value": 37.5 } },
+    { "readingId": "KIT-DEMO-GLUCOSE-0001", "vitalTypeCode": "GLUCOSE", "nationalId": "{{nationalId}}", "dateTime": "2026-10-18T07:58:42",
+      "readingValues": { "Value": 9 } },
+    { "readingId": "KIT-DEMO-PF-0001", "vitalTypeCode": "PF", "nationalId": "{{nationalId}}", "dateTime": "2026-10-18T07:58:42",
+      "readingValues": { "per_min": 13, "fev1_l": 6 } },
+    { "readingId": "KIT-DEMO-WEIGHT-0001", "vitalTypeCode": "WEIGHT", "nationalId": "{{nationalId}}", "dateTime": "2026-10-18T07:58:42+03:00",
+      "readingValues": { "Value": 90 } },
+    { "readingId": "KIT-DEMO-BAD-0001", "vitalTypeCode": "BP", "nationalId": "{{nationalId}}",
+      "readingValues": { "systolic": 120, "pulse": 70 } }
   ]
 }
 
-### 9. Previous readings, newest first, paged
-GET {{baseUrl}}/Observation?patient=Patient/{{patientId}}&_sort=-date&_count=5
-Accept: application/fhir+json
+### 5. Latest 5 readings of each vital type
+POST {{baseUrl}}/GetLatestVitals
+Content-Type: application/json
 X-Api-Key: {{apiKey}}
 
-### 10. One vital type (local code)
-GET {{baseUrl}}/Observation?patient=Patient/{{patientId}}&code=BP
-Accept: application/fhir+json
-X-Api-Key: {{apiKey}}
+{ "nationalId": "{{nationalId}}", "recordsPerType": 5 }
 
-### 11. One vital type (LOINC)
-GET {{baseUrl}}/Observation?patient=Patient/{{patientId}}&code=http://loinc.org|8867-4
-Accept: application/fhir+json
-X-Api-Key: {{apiKey}}
-
-### 12. Date range + category
-GET {{baseUrl}}/Observation?patient=Patient/{{patientId}}&category=laboratory&date=ge2026-10-01&date=le2026-10-31
-Accept: application/fhir+json
-X-Api-Key: {{apiKey}}
-
-### 13. Single Observation create (alternative to the batch)
-POST {{baseUrl}}/Observation
-Content-Type: application/fhir+json
-Accept: application/fhir+json
+### 6. Latest blood tests in a date range
+POST {{baseUrl}}/GetLatestVitals
+Content-Type: application/json
 X-Api-Key: {{apiKey}}
 
 {
-  "resourceType": "Observation",
-  "identifier": [{ "system": "http://fakeeh.example/medical-kit/reading-id", "value": "KIT-DEMO-SINGLE-0001" }],
-  "status": "final",
-  "code": { "coding": [{ "system": "http://fakeeh.example/medical-kit/vital-type", "code": "SPO2" }] },
-  "subject": { "reference": "Patient/{{patientId}}" },
-  "effectiveDateTime": "2026-10-19T09:15:00+03:00",
-  "valueQuantity": { "value": 97, "unit": "%", "system": "http://unitsofmeasure.org", "code": "%" }
+  "nationalId": "{{nationalId}}",
+  "recordsPerType": 5,
+  "vitalTypeCode": "BT",
+  "dateFrom": "2026-05-01",
+  "dateTo": "2026-10-31"
 }

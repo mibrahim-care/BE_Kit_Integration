@@ -1,6 +1,4 @@
 using Fakeeh.MedicalKit.Application.Abstractions;
-using Fakeeh.MedicalKit.Application.Common;
-using Fakeeh.MedicalKit.Application.Readings;
 using Fakeeh.MedicalKit.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,59 +6,40 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Repositories;
 
 internal sealed class ReadingRepository(IntegrationDbContext db) : IReadingRepository
 {
-    public Task<Reading?> GetByIdAsync(Guid id, CancellationToken cancellationToken) =>
-        db.Readings.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
-
     public Task<Reading?> GetByExternalIdAsync(string externalId, CancellationToken cancellationToken) =>
         db.Readings.AsNoTracking().FirstOrDefaultAsync(r => r.ExternalId == externalId, cancellationToken);
 
     public void Add(Reading reading) => db.Readings.Add(reading);
 
-    public async Task<PagedList<Reading>> SearchAsync(ReadingSearchCriteria criteria, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<Reading>> GetLatestPerTypeAsync(LatestReadingsCriteria criteria, CancellationToken cancellationToken)
     {
-        var query = db.Readings.AsNoTracking().Where(r => r.PatientId == criteria.PatientId);
+        var filtered = db.Readings.AsNoTracking().Where(r => r.NationalId == criteria.NationalId);
 
-        if (criteria.Codes is not null)
+        if (criteria.VitalTypeCode is { } code)
         {
-            if (criteria.Codes.Count == 0)
-            {
-                return new PagedList<Reading>([], 0, criteria.Offset, criteria.Count);
-            }
-
-            var wholeTypes = criteria.Codes.Where(c => c.FieldKey is null).Select(c => c.VitalTypeCode).ToList();
-            var typeFields = criteria.Codes.Where(c => c.FieldKey is not null).Select(c => c.VitalTypeCode + "|" + c.FieldKey).ToList();
-
-            query = query.Where(r =>
-                wholeTypes.Contains(r.VitalTypeCode)
-                || (r.FieldKey != null && typeFields.Contains(r.VitalTypeCode + "|" + r.FieldKey)));
-        }
-
-        if (!string.IsNullOrWhiteSpace(criteria.Category))
-        {
-            query = query.Where(r => r.Category == criteria.Category);
+            filtered = filtered.Where(r => r.VitalTypeCode == code);
         }
 
         if (criteria.From is { } from)
         {
-            query = query.Where(r => r.EffectiveAt >= from);
+            filtered = filtered.Where(r => r.EffectiveAt >= from);
         }
 
         if (criteria.To is { } to)
         {
-            query = query.Where(r => r.EffectiveAt < to);
+            filtered = filtered.Where(r => r.EffectiveAt < to);
         }
 
-        var total = await query.CountAsync(cancellationToken);
+        // One CROSS APPLY per vital type: the newest N readings of each type.
+        var latest = filtered
+            .Select(r => r.VitalTypeCode)
+            .Distinct()
+            .SelectMany(typeCode => filtered
+                .Where(r => r.VitalTypeCode == typeCode)
+                .OrderByDescending(r => r.EffectiveAt)
+                .ThenByDescending(r => r.ReceivedAt)
+                .Take(criteria.RecordsPerType));
 
-        query = criteria.SortDescending
-            ? query.OrderByDescending(r => r.EffectiveAt).ThenByDescending(r => r.ReceivedAt)
-            : query.OrderBy(r => r.EffectiveAt).ThenBy(r => r.ReceivedAt);
-
-        var items = await query
-            .Skip(criteria.Offset)
-            .Take(criteria.Count)
-            .ToListAsync(cancellationToken);
-
-        return new PagedList<Reading>(items, total, criteria.Offset, criteria.Count);
+        return await latest.AsSplitQuery().ToListAsync(cancellationToken);
     }
 }
