@@ -14,3 +14,6 @@
 /src/Fakeeh.MedicalKit.Infrastructure/obj
 /tests/Fakeeh.MedicalKit.UnitTests/bin
 /tests/Fakeeh.MedicalKit.UnitTests/obj
+/tests/Fakeeh.MedicalKit.UnitTests/obj/Debug/net10.0/Fakeeh.MedicalKit.UnitTests.AssemblyInfo.cs
+/tests/Fakeeh.MedicalKit.UnitTests/obj/Debug/net10.0/Fakeeh.MedicalKit.UnitTests.AssemblyInfoInputs.cache
+/tests/Fakeeh.MedicalKit.UnitTests/obj/Debug/net10.0/Fakeeh.MedicalKit.UnitTests.csproj.AssemblyReference.cache
