@@ -1,0 +1,13 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs
+/src/Fakeeh.MedicalKit.Api/bin/Debug/net10.0
+/src/Fakeeh.MedicalKit.Api/obj
+/src/Fakeeh.MedicalKit.Application/bin/Debug/net10.0
+/src/Fakeeh.MedicalKit.Application/obj
+/src/Fakeeh.MedicalKit.Domain/bin/Debug/net10.0
+/src/Fakeeh.MedicalKit.Domain/obj
+/src/Fakeeh.MedicalKit.Infrastructure/bin/Debug/net10.0
+/src/Fakeeh.MedicalKit.Infrastructure/obj
