@@ -3,11 +3,14 @@
 ################################################################################
 
 /.vs
-/src/Fakeeh.MedicalKit.Api/bin/Debug/net10.0
+/src/Fakeeh.MedicalKit.Api/bin
 /src/Fakeeh.MedicalKit.Api/obj
-/src/Fakeeh.MedicalKit.Application/bin/Debug/net10.0
+/src/Fakeeh.MedicalKit.Application/bin
 /src/Fakeeh.MedicalKit.Application/obj
-/src/Fakeeh.MedicalKit.Domain/bin/Debug/net10.0
+/src/Fakeeh.MedicalKit.Domain/bin
 /src/Fakeeh.MedicalKit.Domain/obj
-/src/Fakeeh.MedicalKit.Infrastructure/bin/Debug/net10.0
+/src/Fakeeh.MedicalKit.Infrastructure/bin
 /src/Fakeeh.MedicalKit.Infrastructure/obj
+/src/Fakeeh.MedicalKit.Infrastructure/obj
+/tests/Fakeeh.MedicalKit.UnitTests/bin
+/tests/Fakeeh.MedicalKit.UnitTests/obj
