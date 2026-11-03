@@ -17,12 +17,13 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                 name: "VitalTypes",
                 columns: table => new
                 {
-                    Code = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
-                    Name = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
-                    IsActive = table.Column<bool>(type: "bit", nullable: false),
-                    Category = table.Column<string>(type: "nvarchar(30)", maxLength: 30, nullable: false),
-                    LoincCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: true),
-                    ObservationModel = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false)
+                    Code = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: false),
+                    Name = table.Column<string>(type: "NVARCHAR2(100)", maxLength: 100, nullable: false),
+                    IsActive = table.Column<bool>(type: "NUMBER(1)", nullable: false),
+                    Category = table.Column<string>(type: "NVARCHAR2(30)", maxLength: 30, nullable: false),
+                    LoincCode = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: true),
+                    Unit = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: true),
+                    ObservationModel = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: false)
                 },
                 constraints: table =>
                 {
@@ -33,24 +34,24 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                 name: "Readings",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "uniqueidentifier", nullable: false),
-                    ExternalId = table.Column<string>(type: "nvarchar(200)", maxLength: 200, nullable: false),
-                    PatientId = table.Column<string>(type: "nvarchar(64)", maxLength: 64, nullable: false),
-                    NationalId = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: true),
-                    VitalTypeCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
-                    FieldKey = table.Column<string>(type: "nvarchar(50)", maxLength: 50, nullable: true),
-                    Category = table.Column<string>(type: "nvarchar(30)", maxLength: 30, nullable: false),
-                    Status = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
-                    EffectiveAt = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false),
-                    Value = table.Column<decimal>(type: "decimal(18,4)", precision: 18, scale: 4, nullable: true),
-                    Unit = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: true),
-                    UcumCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: true),
-                    Interpretation = table.Column<string>(type: "nvarchar(10)", maxLength: 10, nullable: true),
-                    Note = table.Column<string>(type: "nvarchar(2000)", maxLength: 2000, nullable: true),
-                    Address = table.Column<string>(type: "nvarchar(500)", maxLength: 500, nullable: true),
-                    PerformerRef = table.Column<string>(type: "nvarchar(200)", maxLength: 200, nullable: true),
-                    DeviceRef = table.Column<string>(type: "nvarchar(200)", maxLength: 200, nullable: true),
-                    ReceivedAt = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false)
+                    Id = table.Column<Guid>(type: "RAW(16)", nullable: false),
+                    ExternalId = table.Column<string>(type: "NVARCHAR2(200)", maxLength: 200, nullable: false),
+                    PatientId = table.Column<string>(type: "NVARCHAR2(64)", maxLength: 64, nullable: false),
+                    NationalId = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: true),
+                    VitalTypeCode = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: false),
+                    FieldKey = table.Column<string>(type: "NVARCHAR2(50)", maxLength: 50, nullable: true),
+                    Category = table.Column<string>(type: "NVARCHAR2(30)", maxLength: 30, nullable: false),
+                    Status = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: false),
+                    EffectiveAt = table.Column<DateTimeOffset>(type: "TIMESTAMP(7) WITH TIME ZONE", nullable: false),
+                    Value = table.Column<decimal>(type: "DECIMAL(18,4)", precision: 18, scale: 4, nullable: true),
+                    Unit = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: true),
+                    UcumCode = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: true),
+                    Interpretation = table.Column<string>(type: "NVARCHAR2(10)", maxLength: 10, nullable: true),
+                    Note = table.Column<string>(type: "NVARCHAR2(2000)", maxLength: 2000, nullable: true),
+                    Address = table.Column<string>(type: "NVARCHAR2(500)", maxLength: 500, nullable: true),
+                    PerformerRef = table.Column<string>(type: "NVARCHAR2(200)", maxLength: 200, nullable: true),
+                    DeviceRef = table.Column<string>(type: "NVARCHAR2(200)", maxLength: 200, nullable: true),
+                    ReceivedAt = table.Column<DateTimeOffset>(type: "TIMESTAMP(7) WITH TIME ZONE", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -67,15 +68,15 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                 name: "VitalTypeFields",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "int", nullable: false),
-                    VitalTypeCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
-                    Key = table.Column<string>(type: "nvarchar(50)", maxLength: 50, nullable: false),
-                    Label = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
-                    Unit = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
-                    UcumCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
-                    LoincCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: true),
-                    Required = table.Column<bool>(type: "bit", nullable: false),
-                    SortOrder = table.Column<int>(type: "int", nullable: false)
+                    Id = table.Column<int>(type: "NUMBER(10)", nullable: false),
+                    VitalTypeCode = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: false),
+                    Key = table.Column<string>(type: "NVARCHAR2(50)", maxLength: 50, nullable: false),
+                    Label = table.Column<string>(type: "NVARCHAR2(100)", maxLength: 100, nullable: false),
+                    Unit = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: false),
+                    UcumCode = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: false),
+                    LoincCode = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: true),
+                    Required = table.Column<bool>(type: "NUMBER(1)", nullable: false),
+                    SortOrder = table.Column<int>(type: "NUMBER(10)", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -92,14 +93,14 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                 name: "ReadingComponents",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "int", nullable: false)
-                        .Annotation("SqlServer:Identity", "1, 1"),
-                    FieldKey = table.Column<string>(type: "nvarchar(50)", maxLength: 50, nullable: false),
-                    LoincCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: true),
-                    Value = table.Column<decimal>(type: "decimal(18,4)", precision: 18, scale: 4, nullable: false),
-                    Unit = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
-                    UcumCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
-                    ReadingId = table.Column<Guid>(type: "uniqueidentifier", nullable: false)
+                    Id = table.Column<int>(type: "NUMBER(10)", nullable: false)
+                        .Annotation("Oracle:Identity", "START WITH 1 INCREMENT BY 1"),
+                    FieldKey = table.Column<string>(type: "NVARCHAR2(50)", maxLength: 50, nullable: false),
+                    LoincCode = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: true),
+                    Value = table.Column<decimal>(type: "DECIMAL(18,4)", precision: 18, scale: 4, nullable: false),
+                    Unit = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: false),
+                    UcumCode = table.Column<string>(type: "NVARCHAR2(20)", maxLength: 20, nullable: false),
+                    ReadingId = table.Column<Guid>(type: "RAW(16)", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -114,18 +115,18 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
 
             migrationBuilder.InsertData(
                 table: "VitalTypes",
-                columns: new[] { "Code", "Category", "IsActive", "LoincCode", "Name", "ObservationModel" },
+                columns: new[] { "Code", "Category", "IsActive", "LoincCode", "Name", "ObservationModel", "Unit" },
                 values: new object[,]
                 {
-                    { "BC", "vital-signs", true, null, "Body Composition", "PerField" },
-                    { "BP", "vital-signs", true, "85354-9", "Blood Pressure", "Components" },
-                    { "BT", "laboratory", true, null, "Blood Test", "PerField" },
-                    { "GLUCOSE", "vital-signs", true, null, "Blood Glucose", "SingleValue" },
-                    { "HR", "vital-signs", true, "8867-4", "Heart Rate", "SingleValue" },
-                    { "PF", "vital-signs", true, null, "Peak Flow", "Components" },
-                    { "SPO2", "vital-signs", true, "59408-5", "Oxygen Saturation (SpO2)", "SingleValue" },
-                    { "TEMP", "vital-signs", true, "8310-5", "Temperature", "SingleValue" },
-                    { "WEIGHT", "vital-signs", true, "29463-7", "Weight", "SingleValue" }
+                    { "BC", "vital-signs", true, null, "Body Composition", "PerField", null },
+                    { "BP", "vital-signs", true, "85354-9", "Blood Pressure", "Components", "mmHg" },
+                    { "BT", "laboratory", true, null, "Blood Test", "PerField", "g/dL" },
+                    { "GLUCOSE", "vital-signs", true, null, "Blood Glucose", "SingleValue", "mg/dL" },
+                    { "HR", "vital-signs", true, "8867-4", "Heart Rate", "SingleValue", "bpm" },
+                    { "PF", "vital-signs", true, null, "Peak Flow", "Components", "L/min" },
+                    { "SPO2", "vital-signs", true, "59408-5", "Oxygen Saturation (SpO2)", "SingleValue", "%" },
+                    { "TEMP", "vital-signs", true, "8310-5", "Temperature", "SingleValue", "°C" },
+                    { "WEIGHT", "vital-signs", true, "29463-7", "Weight", "SingleValue", "kg" }
                 });
 
             migrationBuilder.InsertData(
@@ -170,6 +171,12 @@ namespace Fakeeh.MedicalKit.Infrastructure.Persistence.Migrations
                 table: "Readings",
                 column: "ExternalId",
                 unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Readings_NationalId_VitalTypeCode_EffectiveAt",
+                table: "Readings",
+                columns: new[] { "NationalId", "VitalTypeCode", "EffectiveAt" },
+                descending: new[] { false, false, true });
 
             migrationBuilder.CreateIndex(
                 name: "IX_Readings_PatientId_EffectiveAt",

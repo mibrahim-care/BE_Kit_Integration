@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Oracle.EntityFrameworkCore.Infrastructure;
 
 namespace Fakeeh.MedicalKit.Infrastructure;
 
@@ -15,9 +16,10 @@ public static class DependencyInjection
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddDbContext<IntegrationDbContext>(options =>
-            options.UseSqlServer(
-                configuration.GetConnectionString("IntegrationDb")
-                ?? throw new InvalidOperationException("Connection string 'IntegrationDb' is not configured.")));
+            options.UseOracle(
+                configuration.GetConnectionString("OracleDb")
+                ?? throw new InvalidOperationException("Connection string 'OracleDb' is not configured."),
+                oracle => oracle.UseOracleSQLCompatibility(OracleSQLCompatibility.DatabaseVersion19)));
 
         services.AddMemoryCache();
         services.AddScoped<IReadingRepository, ReadingRepository>();
