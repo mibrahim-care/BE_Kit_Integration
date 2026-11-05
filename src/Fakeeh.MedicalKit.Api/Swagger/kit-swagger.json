@@ -1,0 +1,4675 @@
+{
+  "generatedFrom": "Fakeeh_MedicalKit_postman_collection_POST_search.json",
+  "title": "Fakeeh Medical KIT Integration (FHIR R4) - POST search",
+  "description": "# Fakeeh HIS ↔ Medical KIT integration API\n\nHL7 FHIR R4 REST API used by the Medical KIT to **look up patients in Fakeeh HIS** and **record device readings**.\n\n## Setup\n1. Import this collection and the *Fakeeh Medical KIT – Local* environment, then select the environment.\n2. Set `baseUrl` and `apiKey` for your target environment (the local values work against a developer machine).\n3. Run **1. Patient lookup → Find patient by Iqama** first. It stores the patient id in `patientId`, which every reading request uses.\n\nPatient data comes live from Fakeeh HIS. The FHIR `Patient.id` is the National ID / Iqama number, so readings reference `Patient/<national id>`.\n\n## Conventions\n- Every request except `GET /metadata` needs the header `X-Api-Key`. A missing or wrong key returns **401** with an `OperationOutcome`.\n- Send and expect `application/fhir+json`.\n- **All searches are POST (FHIR `_search`)**: `POST /Patient/_search` and `POST /Observation/_search`. Search parameters go in an `application/x-www-form-urlencoded` body, so no patient identifier (National ID / Iqama) appears in the URL or in server and proxy logs. Only `GET /metadata` and `GET /CodeSystem/...` stay GET because they carry no patient data.\n- Every reading **must** carry a unique KIT reading id in `Observation.identifier` (system `http://fakeeh.example/medical-kit/reading-id`). Re-sending the same id is safe: the API returns **200** with the stored reading instead of creating a duplicate, so retries after a timeout are idempotent.\n- `effectiveDateTime` **must** include a timezone offset, e.g. `2026-10-18T07:58:42+03:00`. Values without an offset are rejected with **400**.\n- Units are UCUM (`valueQuantity.system = http://unitsofmeasure.org`). The accepted unit per field is listed by **Get vital types**.\n- Errors are always returned as a FHIR `OperationOutcome`; `issue.diagnostics` has the human-readable reason.\n\n## Sending readings\n- **Recommended:** `POST /fhir` with a `batch` Bundle. Each entry is processed on its own, so one bad reading never blocks the others. The response is a `batch-response` with one entry per request entry, in the same order: `201` created, `200` already existed, `4xx` rejected (with an `OperationOutcome`).\n- `POST /fhir/Observation` records a single reading.\n\n## Vital type models\n| Code | Shape |\n|---|---|\n| HR, TEMP, SPO2, WEIGHT, GLUCOSE | one Observation with `valueQuantity` |\n| BP | one Observation with `component` systolic (LOINC 8480-6) and diastolic (LOINC 8462-4) |\n| PF | one Observation with `component` `per_min` and `fev1_l` (both required) |\n| BT, BC | **one Observation per field**; the field goes in `code.coding` with system `http://fakeeh.example/medical-kit/vital-field` |\n\nPre-request scripts set `2026-11-05T10:30:00+03:00` (current time, +03:00) and `MHL6Q2ZB` (unique per send) so the samples can be sent repeatedly. Replace them with real values in the KIT.",
+  "tags": [
+    {
+      "name": "0. Server",
+      "description": ""
+    },
+    {
+      "name": "1. Patient lookup",
+      "description": "Wraps the Fakeeh HIS patient lookup. Search by National ID (starts with 1) or Iqama (starts with 2). A patient that does not exist returns **200** with an empty Bundle (`total: 0`), not 404."
+    },
+    {
+      "name": "2. Reference data",
+      "description": ""
+    },
+    {
+      "name": "3. Send readings – batch (recommended)",
+      "description": "Send readings as a FHIR `batch` Bundle to `POST /fhir`. Each entry succeeds or fails on its own. Check every `entry[i].response.status` in the reply."
+    },
+    {
+      "name": "4. Send readings – single Observation",
+      "description": "`POST /fhir/Observation` records one reading. The optional `If-None-Exist` header (or the `Observation.identifier`) is used to avoid duplicates."
+    },
+    {
+      "name": "5. Previous readings",
+      "description": "`GET /fhir/Observation` searches stored readings for one patient. `patient` is required. Results come in a `searchset` Bundle with `total` and `next`/`previous` links."
+    }
+  ],
+  "operations": [
+    {
+      "key": "GET /fhir/metadata",
+      "tag": "0. Server",
+      "summary": "Server capabilities (CapabilityStatement). Public health check.",
+      "description": "",
+      "requests": [],
+      "headers": [],
+      "responses": [
+        {
+          "status": "200",
+          "name": "Capabilities (metadata)",
+          "description": "Public FHIR `CapabilityStatement`. No API key needed. Use it as a health check.",
+          "body": {
+            "resourceType": "CapabilityStatement",
+            "id": "fakeeh-medical-kit-integration",
+            "url": "https://localhost:7006/fhir/metadata",
+            "name": "FakeehMedicalKitIntegration",
+            "title": "Fakeeh HIS - Medical KIT Integration (POC)",
+            "status": "active",
+            "experimental": true,
+            "date": "2026-11-03T23:28:03.4055681+00:00",
+            "publisher": "Fakeeh",
+            "kind": "instance",
+            "software": {
+              "name": "Fakeeh.MedicalKit.Api",
+              "version": "0.1.0"
+            },
+            "implementation": {
+              "description": "FHIR facade over the Medical KIT readings store and the Fakeeh HIS patient API.",
+              "url": "https://localhost:7006/fhir"
+            },
+            "fhirVersion": "4.0.1",
+            "format": [
+              "json"
+            ],
+            "rest": [
+              {
+                "mode": "server",
+                "security": {
+                  "description": "Send the API key in the X-Api-Key header. /metadata is public."
+                },
+                "resource": [
+                  {
+                    "type": "Patient",
+                    "documentation": "Read-only proxy to Fakeeh HIS. Patient.id is the National ID / Iqama number. Search with POST [type]/_search and the parameters in an application/x-www-form-urlencoded body, so no patient identifier appears in a URL.",
+                    "interaction": [
+                      {
+                        "code": "search-type"
+                      }
+                    ],
+                    "searchParam": [
+                      {
+                        "name": "identifier",
+                        "type": "token",
+                        "documentation": "http://nphies.sa/identifier/nationalid|{id} or http://nphies.sa/identifier/iqama|{id}"
+                      },
+                      {
+                        "name": "_id",
+                        "type": "token",
+                        "documentation": "Patient id (the National ID / Iqama number)."
+                      }
+                    ]
+                  },
+                  {
+                    "type": "Observation",
+                    "documentation": "Medical KIT device readings. Create is idempotent on the KIT reading id. Search with POST [type]/_search and the parameters in an application/x-www-form-urlencoded body, so no patient identifier appears in a URL.",
+                    "interaction": [
+                      {
+                        "code": "create"
+                      },
+                      {
+                        "code": "search-type"
+                      }
+                    ],
+                    "conditionalCreate": true,
+                    "searchParam": [
+                      {
+                        "name": "patient",
+                        "type": "reference",
+                        "documentation": "Patient/{id} from the Patient search. Required unless _id is given."
+                      },
+                      {
+                        "name": "_id",
+                        "type": "token",
+                        "documentation": "Observation id, as returned by the create."
+                      },
+                      {
+                        "name": "code",
+                        "type": "token",
+                        "documentation": "LOINC, vital-type or vital-field code, with or without system."
+                      },
+                      {
+                        "name": "category",
+                        "type": "token",
+                        "documentation": "vital-signs | laboratory"
+                      },
+                      {
+                        "name": "date",
+                        "type": "date",
+                        "documentation": "effectiveDateTime; repeatable; prefixes eq, ge, gt, le, lt."
+                      },
+                      {
+                        "name": "_count",
+                        "type": "number",
+                        "documentation": "Page size (default 20, max 100)."
+                      },
+                      {
+                        "name": "_offset",
+                        "type": "number",
+                        "documentation": "Number of results to skip."
+                      },
+                      {
+                        "name": "_sort",
+                        "type": "string",
+                        "documentation": "-date (default) or date."
+                      },
+                      {
+                        "name": "_page",
+                        "type": "string",
+                        "documentation": "Opaque token from a self / previous / next link of a previous search."
+                      }
+                    ]
+                  },
+                  {
+                    "type": "CodeSystem",
+                    "documentation": "CodeSystem/medical-kit-vital-type lists the vital types and their fields.",
+                    "interaction": [
+                      {
+                        "code": "read"
+                      }
+                    ]
+                  }
+                ],
+                "interaction": [
+                  {
+                    "code": "batch",
+                    "documentation": "POST [base] with a batch Bundle of Observation creates. Each entry succeeds or fails on its own."
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "key": "POST /fhir/Patient/_search",
+      "tag": "1. Patient lookup",
+      "summary": "Find a patient in Fakeeh HIS by National ID / Iqama.",
+      "description": "Wraps the Fakeeh HIS patient lookup. Search by National ID (starts with 1) or Iqama (starts with 2). A patient that does not exist returns **200** with an empty Bundle (`total: 0`), not 404.",
+      "requests": [
+        {
+          "name": "Find patient by Iqama",
+          "description": "POST-based FHIR search (`Patient/_search`). The identifier goes in the form body, not in the URL. Returns a `searchset` Bundle. The test script stores the patient id in `patientId`. The patient id is the National ID / Iqama number itself.",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": {
+            "identifier": "http://nphies.sa/identifier/iqama|2627530575"
+          }
+        },
+        {
+          "name": "Find patient by National ID",
+          "description": "Same as the Iqama search, for Saudi citizens (ID starts with 1). The identifier goes in the form body. Also stores `patientId`.",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": {
+            "identifier": "http://nphies.sa/identifier/nationalid|1012345678"
+          }
+        },
+        {
+          "name": "Find patient – not found",
+          "description": "Unknown identifier → `200` with `total: 0`. Show \"patient not found\" in the KIT.",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": {
+            "identifier": "http://nphies.sa/identifier/nationalid|1000000000"
+          }
+        },
+        {
+          "name": "Find patient by id (_id)",
+          "description": "FHIR has no POST read, so a patient is fetched by id with `_id` in the form body (the id is the National ID / Iqama, so it must not appear in the URL). Unknown id → `200` with `total: 0`.",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": {
+            "_id": "2627530575"
+          }
+        }
+      ],
+      "headers": [],
+      "responses": [
+        {
+          "status": "200",
+          "name": "Find patient by Iqama",
+          "description": "POST-based FHIR search (`Patient/_search`). The identifier goes in the form body, not in the URL. Returns a `searchset` Bundle. The test script stores the patient id in `patientId`. The patient id is the National ID / Iqama number itself.",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "d4724b27-b6b8-4224-a9fc-e31b496fdfa9",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:08.8373703+00:00"
+            },
+            "type": "searchset",
+            "total": 1,
+            "entry": [
+              {
+                "fullUrl": "https://localhost:7006/fhir/Patient/2627530575",
+                "resource": {
+                  "resourceType": "Patient",
+                  "id": "2627530575",
+                  "identifier": [
+                    {
+                      "type": {
+                        "coding": [
+                          {
+                            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+                            "code": "PRC",
+                            "display": "Permanent Resident Card Number"
+                          }
+                        ]
+                      },
+                      "system": "http://nphies.sa/identifier/iqama",
+                      "value": "2627530575"
+                    },
+                    {
+                      "type": {
+                        "coding": [
+                          {
+                            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+                            "code": "MR",
+                            "display": "Medical record number"
+                          }
+                        ]
+                      },
+                      "system": "http://fakeeh.example/his/mrn",
+                      "value": "0000000"
+                    }
+                  ],
+                  "active": true,
+                  "name": [
+                    {
+                      "use": "official",
+                      "family": "Patient",
+                      "given": [
+                        "Sample"
+                      ],
+                      "text": "Sample Patient"
+                    },
+                    {
+                      "use": "usual",
+                      "text": "مريض تجريبي"
+                    }
+                  ],
+                  "telecom": [
+                    {
+                      "system": "phone",
+                      "value": "+966500000000",
+                      "use": "mobile"
+                    }
+                  ],
+                  "gender": "unknown"
+                },
+                "search": {
+                  "mode": "match"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "200",
+          "name": "Find patient – not found",
+          "description": "Unknown identifier → `200` with `total: 0`. Show \"patient not found\" in the KIT.",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "692fd3e8-4c77-4aba-ac51-133d68a9932f",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:12.6789776+00:00"
+            },
+            "type": "searchset",
+            "total": 0
+          }
+        },
+        {
+          "status": "200",
+          "name": "Find patient by id (_id)",
+          "description": "FHIR has no POST read, so a patient is fetched by id with `_id` in the form body (the id is the National ID / Iqama, so it must not appear in the URL). Unknown id → `200` with `total: 0`.",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "47501aaa-f8b3-4665-8c84-1515b0ab985e",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:12.7760498+00:00"
+            },
+            "type": "searchset",
+            "total": 1,
+            "entry": [
+              {
+                "fullUrl": "https://localhost:7006/fhir/Patient/2627530575",
+                "resource": {
+                  "resourceType": "Patient",
+                  "id": "2627530575",
+                  "identifier": [
+                    {
+                      "type": {
+                        "coding": [
+                          {
+                            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+                            "code": "PRC",
+                            "display": "Permanent Resident Card Number"
+                          }
+                        ]
+                      },
+                      "system": "http://nphies.sa/identifier/iqama",
+                      "value": "2627530575"
+                    },
+                    {
+                      "type": {
+                        "coding": [
+                          {
+                            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+                            "code": "MR",
+                            "display": "Medical record number"
+                          }
+                        ]
+                      },
+                      "system": "http://fakeeh.example/his/mrn",
+                      "value": "0000000"
+                    }
+                  ],
+                  "active": true,
+                  "name": [
+                    {
+                      "use": "official",
+                      "family": "Patient",
+                      "given": [
+                        "Sample"
+                      ],
+                      "text": "Sample Patient"
+                    },
+                    {
+                      "use": "usual",
+                      "text": "مريض تجريبي"
+                    }
+                  ],
+                  "telecom": [
+                    {
+                      "system": "phone",
+                      "value": "+966500000000",
+                      "use": "mobile"
+                    }
+                  ],
+                  "gender": "unknown"
+                },
+                "search": {
+                  "mode": "match"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "401",
+          "name": "Missing API key → 401",
+          "description": "Shows the error returned when `X-Api-Key` is missing or wrong.",
+          "body": {
+            "resourceType": "OperationOutcome",
+            "issue": [
+              {
+                "severity": "error",
+                "code": "security",
+                "details": {
+                  "text": "security.api_key"
+                },
+                "diagnostics": "Missing X-Api-Key header."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "key": "GET /fhir/CodeSystem/medical-kit-vital-type",
+      "tag": "2. Reference data",
+      "summary": "Supported vital types, fields, units and LOINC codes.",
+      "description": "",
+      "requests": [],
+      "headers": [],
+      "responses": [
+        {
+          "status": "200",
+          "name": "Get vital types",
+          "description": "FHIR `CodeSystem` with every supported vital type and its fields: label, UCUM unit, LOINC code (when confirmed) and whether the field is required. Use it to validate readings on the KIT side before sending.",
+          "body": {
+            "resourceType": "CodeSystem",
+            "id": "medical-kit-vital-type",
+            "url": "http://fakeeh.example/medical-kit/vital-type",
+            "name": "MedicalKitVitalType",
+            "title": "Medical KIT vital types",
+            "status": "active",
+            "description": "Vital types recorded by the Medical KIT. Nested concepts are the fields of each type; their 'fieldKey' property is the code used with http://fakeeh.example/medical-kit/vital-field.",
+            "content": "complete",
+            "count": 9,
+            "property": [
+              {
+                "code": "category",
+                "description": "FHIR observation category",
+                "type": "code"
+              },
+              {
+                "code": "observationModel",
+                "description": "SingleValue | Components | PerField",
+                "type": "code"
+              },
+              {
+                "code": "loinc",
+                "description": "LOINC code, when confirmed",
+                "type": "code"
+              },
+              {
+                "code": "fieldKey",
+                "description": "Field key as sent by the KIT",
+                "type": "code"
+              },
+              {
+                "code": "unit",
+                "description": "Display unit",
+                "type": "string"
+              },
+              {
+                "code": "ucum",
+                "description": "UCUM unit code",
+                "type": "code"
+              },
+              {
+                "code": "required",
+                "description": "Field is required",
+                "type": "boolean"
+              }
+            ],
+            "concept": [
+              {
+                "code": "BC",
+                "display": "Body Composition",
+                "property": [
+                  {
+                    "code": "category",
+                    "valueCode": "vital-signs"
+                  },
+                  {
+                    "code": "observationModel",
+                    "valueCode": "PerField"
+                  }
+                ],
+                "concept": [
+                  {
+                    "code": "BC.bmi",
+                    "display": "BMI",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "bmi"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "kg/m²"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "kg/m2"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      },
+                      {
+                        "code": "loinc",
+                        "valueCode": "39156-5"
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BC.body_fat",
+                    "display": "Body fat",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "body_fat"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "kg"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "kg"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BC.body_fat_percentage",
+                    "display": "Body fat percentage",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "body_fat_percentage"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "%"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "%"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BC.body_water_percentage",
+                    "display": "Body water percentage",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "body_water_percentage"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "%"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "%"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BC.visceral_fat",
+                    "display": "Visceral fat level",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "visceral_fat"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "level"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "{level}"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BC.skeletal_muscle",
+                    "display": "Skeletal muscle mass",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "skeletal_muscle"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "kg"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "kg"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BC.resting_metabolism",
+                    "display": "Resting metabolism",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "resting_metabolism"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "kcal"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "kcal"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BC.basal_metabolic_rate",
+                    "display": "Basal metabolic rate",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "basal_metabolic_rate"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "kcal/day"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "kcal/d"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BC.protein_levels",
+                    "display": "Protein levels",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "protein_levels"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "kg"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "kg"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BC.mineral",
+                    "display": "Mineral content",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "mineral"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "kg"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "kg"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "code": "BP",
+                "display": "Blood Pressure",
+                "property": [
+                  {
+                    "code": "category",
+                    "valueCode": "vital-signs"
+                  },
+                  {
+                    "code": "observationModel",
+                    "valueCode": "Components"
+                  },
+                  {
+                    "code": "loinc",
+                    "valueCode": "85354-9"
+                  }
+                ],
+                "concept": [
+                  {
+                    "code": "BP.systolic",
+                    "display": "Systolic",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "systolic"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "mmHg"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "mm[Hg]"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": true
+                      },
+                      {
+                        "code": "loinc",
+                        "valueCode": "8480-6"
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BP.diastolic",
+                    "display": "Diastolic",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "diastolic"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "mmHg"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "mm[Hg]"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": true
+                      },
+                      {
+                        "code": "loinc",
+                        "valueCode": "8462-4"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "code": "BT",
+                "display": "Blood Test",
+                "property": [
+                  {
+                    "code": "category",
+                    "valueCode": "laboratory"
+                  },
+                  {
+                    "code": "observationModel",
+                    "valueCode": "PerField"
+                  }
+                ],
+                "concept": [
+                  {
+                    "code": "BT.hb_gdL",
+                    "display": "Hemoglobin",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "hb_gdL"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "g/dL"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "g/dL"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": true
+                      },
+                      {
+                        "code": "loinc",
+                        "valueCode": "718-7"
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BT.glucometer_mgdL",
+                    "display": "Glucometer",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "glucometer_mgdL"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "mg/dL"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "mg/dL"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BT.lactate_mmoll",
+                    "display": "Lactate",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "lactate_mmoll"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "mmol/L"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "mmol/L"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BT.ketone_mmoll",
+                    "display": "Ketone",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "ketone_mmoll"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "mmol/L"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "mmol/L"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BT.na_mmoll",
+                    "display": "Sodium",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "na_mmoll"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "mmol/L"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "mmol/L"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  },
+                  {
+                    "code": "BT.k_mmoll",
+                    "display": "Potassium",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "k_mmoll"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "mmol/L"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "mmol/L"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "code": "GLUCOSE",
+                "display": "Blood Glucose",
+                "property": [
+                  {
+                    "code": "category",
+                    "valueCode": "vital-signs"
+                  },
+                  {
+                    "code": "observationModel",
+                    "valueCode": "SingleValue"
+                  }
+                ],
+                "concept": [
+                  {
+                    "code": "GLUCOSE.Value",
+                    "display": "Blood Glucose",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "Value"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "mg/dL"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "mg/dL"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": true
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "code": "HR",
+                "display": "Heart Rate",
+                "property": [
+                  {
+                    "code": "category",
+                    "valueCode": "vital-signs"
+                  },
+                  {
+                    "code": "observationModel",
+                    "valueCode": "SingleValue"
+                  },
+                  {
+                    "code": "loinc",
+                    "valueCode": "8867-4"
+                  }
+                ],
+                "concept": [
+                  {
+                    "code": "HR.Value",
+                    "display": "Heart Rate",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "Value"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "bpm"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "/min"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": true
+                      },
+                      {
+                        "code": "loinc",
+                        "valueCode": "8867-4"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "code": "PF",
+                "display": "Peak Flow",
+                "property": [
+                  {
+                    "code": "category",
+                    "valueCode": "vital-signs"
+                  },
+                  {
+                    "code": "observationModel",
+                    "valueCode": "Components"
+                  }
+                ],
+                "concept": [
+                  {
+                    "code": "PF.per_min",
+                    "display": "PEF",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "per_min"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "L/min"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "L/min"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": true
+                      }
+                    ]
+                  },
+                  {
+                    "code": "PF.fev1_l",
+                    "display": "FEV1",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "fev1_l"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "L"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "L"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": false
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "code": "SPO2",
+                "display": "Oxygen Saturation (SpO2)",
+                "property": [
+                  {
+                    "code": "category",
+                    "valueCode": "vital-signs"
+                  },
+                  {
+                    "code": "observationModel",
+                    "valueCode": "SingleValue"
+                  },
+                  {
+                    "code": "loinc",
+                    "valueCode": "59408-5"
+                  }
+                ],
+                "concept": [
+                  {
+                    "code": "SPO2.Value",
+                    "display": "SpO2",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "Value"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "%"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "%"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": true
+                      },
+                      {
+                        "code": "loinc",
+                        "valueCode": "59408-5"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "code": "TEMP",
+                "display": "Temperature",
+                "property": [
+                  {
+                    "code": "category",
+                    "valueCode": "vital-signs"
+                  },
+                  {
+                    "code": "observationModel",
+                    "valueCode": "SingleValue"
+                  },
+                  {
+                    "code": "loinc",
+                    "valueCode": "8310-5"
+                  }
+                ],
+                "concept": [
+                  {
+                    "code": "TEMP.Value",
+                    "display": "Temperature",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "Value"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "°C"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "Cel"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": true
+                      },
+                      {
+                        "code": "loinc",
+                        "valueCode": "8310-5"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "code": "WEIGHT",
+                "display": "Weight",
+                "property": [
+                  {
+                    "code": "category",
+                    "valueCode": "vital-signs"
+                  },
+                  {
+                    "code": "observationModel",
+                    "valueCode": "SingleValue"
+                  },
+                  {
+                    "code": "loinc",
+                    "valueCode": "29463-7"
+                  }
+                ],
+                "concept": [
+                  {
+                    "code": "WEIGHT.Value",
+                    "display": "Weight",
+                    "property": [
+                      {
+                        "code": "fieldKey",
+                        "valueCode": "Value"
+                      },
+                      {
+                        "code": "unit",
+                        "valueString": "kg"
+                      },
+                      {
+                        "code": "ucum",
+                        "valueCode": "kg"
+                      },
+                      {
+                        "code": "required",
+                        "valueBoolean": true
+                      },
+                      {
+                        "code": "loinc",
+                        "valueCode": "29463-7"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "key": "POST /fhir",
+      "tag": "3. Send readings – batch (recommended)",
+      "summary": "Send readings as a batch Bundle (recommended).",
+      "description": "Send readings as a FHIR `batch` Bundle to `POST /fhir`. Each entry succeeds or fails on its own. Check every `entry[i].response.status` in the reply.",
+      "requests": [
+        {
+          "name": "Batch – all vital types",
+          "description": "One entry per vital type/field from *Vital Types.md*: BP, HR, SPO2, TEMP, WEIGHT, GLUCOSE, PF, BT (Hb, Na) and BC (BMI, visceral fat). All entries should return `201 Created`.",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Bundle",
+            "type": "batch",
+            "entry": [
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BP-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "85354-9"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BP"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "component": [
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://loinc.org",
+                            "code": "8480-6"
+                          }
+                        ]
+                      },
+                      "valueQuantity": {
+                        "value": 121,
+                        "unit": "mmHg",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "mm[Hg]"
+                      }
+                    },
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://loinc.org",
+                            "code": "8462-4"
+                          }
+                        ]
+                      },
+                      "valueQuantity": {
+                        "value": 81,
+                        "unit": "mmHg",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "mm[Hg]"
+                      }
+                    }
+                  ],
+                  "note": [
+                    {
+                      "text": "قراءة ضغط الدم من جهاز الموبايل"
+                    }
+                  ],
+                  "extension": [
+                    {
+                      "url": "http://fakeeh.example/fhir/StructureDefinition/reading-address",
+                      "valueString": "السعوديه , الرياض"
+                    }
+                  ]
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-BP-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-HR-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "8867-4"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "HR"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 119,
+                    "unit": "bpm",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "/min"
+                  },
+                  "interpretation": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                          "code": "H"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-HR-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-SPO2-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "59408-5"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "SPO2"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 97,
+                    "unit": "%",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "%"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-SPO2-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-TEMP-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "8310-5"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "TEMP"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 37.5,
+                    "unit": "°C",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "Cel"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-TEMP-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-WEIGHT-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "29463-7"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "WEIGHT"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 90,
+                    "unit": "kg",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "kg"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-WEIGHT-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-GLUCOSE-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "laboratory"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "GLUCOSE"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 95,
+                    "unit": "mg/dL",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "mg/dL"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-GLUCOSE-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-PF-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "PF"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "component": [
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "per_min"
+                          }
+                        ]
+                      },
+                      "valueQuantity": {
+                        "value": 430,
+                        "unit": "L/min",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "L/min"
+                      }
+                    },
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "fev1_l"
+                          }
+                        ]
+                      },
+                      "valueQuantity": {
+                        "value": 3.2,
+                        "unit": "L",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "L"
+                      }
+                    }
+                  ]
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-PF-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BT-HB-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "laboratory"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "718-7"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BT"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-field",
+                        "code": "hb_gdL"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 13.5,
+                    "unit": "g/dL",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "g/dL"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-BT-HB-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BT-NA-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "laboratory"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BT"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-field",
+                        "code": "na_mmoll"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 140,
+                    "unit": "mmol/L",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "mmol/L"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-BT-NA-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BC-BMI-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "39156-5"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BC"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-field",
+                        "code": "bmi"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 27.4,
+                    "unit": "kg/m²",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "kg/m2"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-BC-BMI-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BC-VF-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BC"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-field",
+                        "code": "visceral_fat"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 9,
+                    "unit": "level",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "{level}"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-BC-VF-MHL6Q2ZB"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "Batch – duplicate reading (idempotent retry)",
+          "description": "The same reading id twice. The first entry is created (`201`), the second returns `200 OK` pointing to the stored reading. The KIT can safely resend a batch after a timeout.",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Bundle",
+            "type": "batch",
+            "entry": [
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-DUP-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "laboratory"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "GLUCOSE"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 101,
+                    "unit": "mg/dL",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "mg/dL"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-DUP-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-DUP-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "laboratory"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "GLUCOSE"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 101,
+                    "unit": "mg/dL",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "mg/dL"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-DUP-MHL6Q2ZB"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "Batch – partial failure examples",
+          "description": "Shows how rejected entries are reported while valid ones are still saved:\n1. valid HR → `201`\n2. `effectiveDateTime` without timezone → `400`\n3. TEMP in °F (`[degF]`), only `Cel` is accepted → `400`\n4. unknown vital type `XYZ` → `400`\n5. PF missing the required `per_min` component → `400`\n\nEach rejected entry carries an `OperationOutcome` in `entry[i].response.outcome`.",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Bundle",
+            "type": "batch",
+            "entry": [
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-OK-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "8867-4"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "HR"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 72,
+                    "unit": "bpm",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "/min"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-OK-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-NO-TZ-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "8867-4"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "HR"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-10-18T07:58:42",
+                  "valueQuantity": {
+                    "value": 72,
+                    "unit": "bpm",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "/min"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-NO-TZ-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BAD-UNIT-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "8310-5"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "TEMP"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 98.6,
+                    "unit": "°F",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "[degF]"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-BAD-UNIT-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BAD-TYPE-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "XYZ"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "valueQuantity": {
+                    "value": 1,
+                    "unit": "1",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "1"
+                  }
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-BAD-TYPE-MHL6Q2ZB"
+                }
+              },
+              {
+                "resource": {
+                  "resourceType": "Observation",
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-PF-MISSING-MHL6Q2ZB"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "PF"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575"
+                  },
+                  "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+                  "component": [
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "fev1_l"
+                          }
+                        ]
+                      },
+                      "valueQuantity": {
+                        "value": 3.2,
+                        "unit": "L",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "L"
+                      }
+                    }
+                  ]
+                },
+                "request": {
+                  "method": "POST",
+                  "url": "Observation",
+                  "ifNoneExist": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-PF-MISSING-MHL6Q2ZB"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "headers": [],
+      "responses": [
+        {
+          "status": "200",
+          "name": "Batch – all vital types",
+          "description": "One entry per vital type/field from *Vital Types.md*: BP, HR, SPO2, TEMP, WEIGHT, GLUCOSE, PF, BT (Hb, Na) and BC (BMI, visceral fat). All entries should return `201 Created`.",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "2992797a-b314-4c94-a6a9-6d33fd489f8d",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:13.5147469+00:00"
+            },
+            "type": "batch-response",
+            "entry": [
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/6d07e84c-c38b-4634-a7bf-93bc99ed7489",
+                  "lastModified": "2026-11-03T23:28:13.9660717+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/d77c5fc4-7621-4ace-bbf1-7e620e58b738",
+                  "lastModified": "2026-11-03T23:28:13.9834171+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/889a95b0-19aa-4677-b6df-4352257011b9",
+                  "lastModified": "2026-11-03T23:28:13.9911721+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/e0cd6e6a-b2c9-4b46-9ef2-78758bd5e00e",
+                  "lastModified": "2026-11-03T23:28:13.994539+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/10274104-3782-49fa-a426-8e3db04c4ee3",
+                  "lastModified": "2026-11-03T23:28:13.9971161+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/45815b3a-2c7e-4760-a6ce-767d53d13567",
+                  "lastModified": "2026-11-03T23:28:14.0000665+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/b006bf89-db7c-4547-9d22-02b7bc862d82",
+                  "lastModified": "2026-11-03T23:28:14.0034047+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/590d0409-7af0-44fb-b667-d72cc30e9caf",
+                  "lastModified": "2026-11-03T23:28:14.0064711+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/69a1a4ad-9c25-427a-83ed-e6482fc3c806",
+                  "lastModified": "2026-11-03T23:28:14.0097466+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/fe2794a7-cc87-441e-a2b8-917ae34e99e6",
+                  "lastModified": "2026-11-03T23:28:14.0125299+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/5ec37793-1f96-4b99-baab-7a1cbdf4f4c5",
+                  "lastModified": "2026-11-03T23:28:14.0151329+00:00"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "200",
+          "name": "Batch – duplicate reading (idempotent retry)",
+          "description": "The same reading id twice. The first entry is created (`201`), the second returns `200 OK` pointing to the stored reading. The KIT can safely resend a batch after a timeout.",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "a73cdb5d-d5dc-417e-8156-52e86b562a57",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:14.1103585+00:00"
+            },
+            "type": "batch-response",
+            "entry": [
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/f931153f-8ad2-4335-93c9-e199ed15da86",
+                  "lastModified": "2026-11-03T23:28:14.1263175+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "200 OK",
+                  "location": "Observation/f931153f-8ad2-4335-93c9-e199ed15da86",
+                  "lastModified": "2026-11-03T23:28:14.1426504+00:00"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "200",
+          "name": "Batch – partial failure examples",
+          "description": "Shows how rejected entries are reported while valid ones are still saved:\n1. valid HR → `201`\n2. `effectiveDateTime` without timezone → `400`\n3. TEMP in °F (`[degF]`), only `Cel` is accepted → `400`\n4. unknown vital type `XYZ` → `400`\n5. PF missing the required `per_min` component → `400`\n\nEach rejected entry carries an `OperationOutcome` in `entry[i].response.outcome`.",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "4522cfb7-c579-4f8d-81c9-58f57f3c949c",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:14.2279131+00:00"
+            },
+            "type": "batch-response",
+            "entry": [
+              {
+                "response": {
+                  "status": "201 Created",
+                  "location": "Observation/51a0a092-8287-470a-847b-94ab11e34af1",
+                  "lastModified": "2026-11-03T23:28:14.240433+00:00"
+                }
+              },
+              {
+                "response": {
+                  "status": "400 Bad Request",
+                  "outcome": {
+                    "resourceType": "OperationOutcome",
+                    "issue": [
+                      {
+                        "severity": "error",
+                        "code": "invalid",
+                        "details": {
+                          "text": "reading.effective_timezone"
+                        },
+                        "diagnostics": "Observation.effectiveDateTime must be a full date-time with a time zone, e.g. 2026-10-18T07:58:42+03:00.",
+                        "expression": [
+                          "effectiveDateTime"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "response": {
+                  "status": "400 Bad Request",
+                  "outcome": {
+                    "resourceType": "OperationOutcome",
+                    "issue": [
+                      {
+                        "severity": "error",
+                        "code": "invalid",
+                        "details": {
+                          "text": "reading.unit_mismatch"
+                        },
+                        "diagnostics": "Field 'Value' must use UCUM unit 'Cel', but '[degF]' was sent.",
+                        "expression": [
+                          "valueQuantity"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "response": {
+                  "status": "400 Bad Request",
+                  "outcome": {
+                    "resourceType": "OperationOutcome",
+                    "issue": [
+                      {
+                        "severity": "error",
+                        "code": "invalid",
+                        "details": {
+                          "text": "reading.unknown_vital_type"
+                        },
+                        "diagnostics": "Unknown or inactive vital type 'XYZ'.",
+                        "expression": [
+                          "code"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "response": {
+                  "status": "400 Bad Request",
+                  "outcome": {
+                    "resourceType": "OperationOutcome",
+                    "issue": [
+                      {
+                        "severity": "error",
+                        "code": "invalid",
+                        "details": {
+                          "text": "reading.required_component_missing"
+                        },
+                        "diagnostics": "Vital type 'PF' requires component 'per_min'.",
+                        "expression": [
+                          "component"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "key": "POST /fhir/Observation",
+      "tag": "4. Send readings – single Observation",
+      "summary": "Send one reading.",
+      "description": "`POST /fhir/Observation` records one reading. The optional `If-None-Exist` header (or the `Observation.identifier`) is used to avoid duplicates.",
+      "requests": [
+        {
+          "name": "Send Blood Pressure (BP)",
+          "description": "Records one Blood Pressure (BP) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nBP uses `component` for systolic and diastolic. `note` and the address extension are optional.",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BP-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "85354-9"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BP"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "component": [
+              {
+                "code": {
+                  "coding": [
+                    {
+                      "system": "http://loinc.org",
+                      "code": "8480-6"
+                    }
+                  ]
+                },
+                "valueQuantity": {
+                  "value": 121,
+                  "unit": "mmHg",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "mm[Hg]"
+                }
+              },
+              {
+                "code": {
+                  "coding": [
+                    {
+                      "system": "http://loinc.org",
+                      "code": "8462-4"
+                    }
+                  ]
+                },
+                "valueQuantity": {
+                  "value": 81,
+                  "unit": "mmHg",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "mm[Hg]"
+                }
+              }
+            ],
+            "note": [
+              {
+                "text": "قراءة ضغط الدم من جهاز الموبايل"
+              }
+            ],
+            "extension": [
+              {
+                "url": "http://fakeeh.example/fhir/StructureDefinition/reading-address",
+                "valueString": "السعوديه , الرياض"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Send Heart Rate (HR)",
+          "description": "Records one Heart Rate (HR) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\n`interpretation` (H/L/N…) is optional.",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-HR-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "8867-4"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "HR"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "valueQuantity": {
+              "value": 119,
+              "unit": "bpm",
+              "system": "http://unitsofmeasure.org",
+              "code": "/min"
+            },
+            "interpretation": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                    "code": "H"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "Send Oxygen Saturation (SPO2)",
+          "description": "Records one Oxygen Saturation (SPO2) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-SPO2-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "59408-5"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "SPO2"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "valueQuantity": {
+              "value": 97,
+              "unit": "%",
+              "system": "http://unitsofmeasure.org",
+              "code": "%"
+            }
+          }
+        },
+        {
+          "name": "Send Temperature (TEMP)",
+          "description": "Records one Temperature (TEMP) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-TEMP-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "8310-5"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "TEMP"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "valueQuantity": {
+              "value": 37.5,
+              "unit": "°C",
+              "system": "http://unitsofmeasure.org",
+              "code": "Cel"
+            }
+          }
+        },
+        {
+          "name": "Send Weight (WEIGHT)",
+          "description": "Records one Weight (WEIGHT) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-WEIGHT-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "WEIGHT"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "valueQuantity": {
+              "value": 90,
+              "unit": "kg",
+              "system": "http://unitsofmeasure.org",
+              "code": "kg"
+            }
+          }
+        },
+        {
+          "name": "Send Blood Glucose (GLUCOSE)",
+          "description": "Records one Blood Glucose (GLUCOSE) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-GLUCOSE-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "laboratory"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "GLUCOSE"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "valueQuantity": {
+              "value": 95,
+              "unit": "mg/dL",
+              "system": "http://unitsofmeasure.org",
+              "code": "mg/dL"
+            }
+          }
+        },
+        {
+          "name": "Send Peak Flow (PF)",
+          "description": "Records one Peak Flow (PF) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nPF uses `component` with fields `per_min` and `fev1_l`, both required.",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-PF-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "PF"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "component": [
+              {
+                "code": {
+                  "coding": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/vital-field",
+                      "code": "per_min"
+                    }
+                  ]
+                },
+                "valueQuantity": {
+                  "value": 430,
+                  "unit": "L/min",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "L/min"
+                }
+              },
+              {
+                "code": {
+                  "coding": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/vital-field",
+                      "code": "fev1_l"
+                    }
+                  ]
+                },
+                "valueQuantity": {
+                  "value": 3.2,
+                  "unit": "L",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "L"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "Send Blood Test – Hemoglobin (BT / hb_gdL)",
+          "description": "Records one Blood Test – Hemoglobin (BT / hb_gdL) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nBlood Test is sent as **one Observation per field**; the field code is in `code.coding` (system `http://fakeeh.example/medical-kit/vital-field`).",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BT-HB-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "laboratory"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "718-7"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BT"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-field",
+                  "code": "hb_gdL"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "valueQuantity": {
+              "value": 13.5,
+              "unit": "g/dL",
+              "system": "http://unitsofmeasure.org",
+              "code": "g/dL"
+            }
+          }
+        },
+        {
+          "name": "Send Blood Test – Sodium (BT / na_mmoll)",
+          "description": "Records one Blood Test – Sodium (BT / na_mmoll) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BT-NA-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "laboratory"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BT"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-field",
+                  "code": "na_mmoll"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "valueQuantity": {
+              "value": 140,
+              "unit": "mmol/L",
+              "system": "http://unitsofmeasure.org",
+              "code": "mmol/L"
+            }
+          }
+        },
+        {
+          "name": "Send Body Composition – BMI (BC / bmi)",
+          "description": "Records one Body Composition – BMI (BC / bmi) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nBody Composition is sent as **one Observation per field**.",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BC-BMI-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "39156-5"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BC"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-field",
+                  "code": "bmi"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "valueQuantity": {
+              "value": 27.4,
+              "unit": "kg/m²",
+              "system": "http://unitsofmeasure.org",
+              "code": "kg/m2"
+            }
+          }
+        },
+        {
+          "name": "Send Body Composition – Visceral fat (BC / visceral_fat)",
+          "description": "Records one Body Composition – Visceral fat (BC / visceral_fat) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nUnitless level: UCUM code `{level}`.",
+          "contentType": "application/fhir+json",
+          "body": {
+            "resourceType": "Observation",
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BC-VF-MHL6Q2ZB"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BC"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-field",
+                  "code": "visceral_fat"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/2627530575"
+            },
+            "effectiveDateTime": "2026-11-05T10:30:00+03:00",
+            "valueQuantity": {
+              "value": 9,
+              "unit": "level",
+              "system": "http://unitsofmeasure.org",
+              "code": "{level}"
+            }
+          }
+        }
+      ],
+      "headers": [
+        {
+          "name": "If-None-Exist",
+          "example": "identifier=http://fakeeh.example/medical-kit/reading-id|KIT-BP-MHL6Q2ZB"
+        }
+      ],
+      "responses": [
+        {
+          "status": "201",
+          "name": "Send Blood Pressure (BP)",
+          "description": "Records one Blood Pressure (BP) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nBP uses `component` for systolic and diastolic. `note` and the address extension are optional.",
+          "body": {
+            "resourceType": "Observation",
+            "id": "9f5a2005-bb4a-4f09-aa6a-7d6f441b69af",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:14.3532894+00:00"
+            },
+            "extension": [
+              {
+                "url": "http://fakeeh.example/fhir/StructureDefinition/reading-address",
+                "valueString": "السعوديه , الرياض"
+              }
+            ],
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BP-MW1BJG85"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs",
+                    "display": "Vital Signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "85354-9",
+                  "display": "Blood Pressure"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BP",
+                  "display": "Blood Pressure"
+                }
+              ],
+              "text": "Blood Pressure"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+            "note": [
+              {
+                "text": "قراءة ضغط الدم من جهاز الموبايل"
+              }
+            ],
+            "component": [
+              {
+                "code": {
+                  "coding": [
+                    {
+                      "system": "http://loinc.org",
+                      "code": "8462-4",
+                      "display": "Diastolic"
+                    },
+                    {
+                      "system": "http://fakeeh.example/medical-kit/vital-field",
+                      "code": "diastolic",
+                      "display": "Diastolic"
+                    }
+                  ],
+                  "text": "Diastolic"
+                },
+                "valueQuantity": {
+                  "value": 81,
+                  "unit": "mmHg",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "mm[Hg]"
+                }
+              },
+              {
+                "code": {
+                  "coding": [
+                    {
+                      "system": "http://loinc.org",
+                      "code": "8480-6",
+                      "display": "Systolic"
+                    },
+                    {
+                      "system": "http://fakeeh.example/medical-kit/vital-field",
+                      "code": "systolic",
+                      "display": "Systolic"
+                    }
+                  ],
+                  "text": "Systolic"
+                },
+                "valueQuantity": {
+                  "value": 121,
+                  "unit": "mmHg",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "mm[Hg]"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Heart Rate (HR)",
+          "description": "Records one Heart Rate (HR) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\n`interpretation` (H/L/N…) is optional.",
+          "body": {
+            "resourceType": "Observation",
+            "id": "761d6707-5f06-4e3a-b072-4e2434c2f00e",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:14.4759341+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-HR-MW1BJGC4"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs",
+                    "display": "Vital Signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "8867-4",
+                  "display": "Heart Rate"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "HR",
+                  "display": "Heart Rate"
+                }
+              ],
+              "text": "Heart Rate"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+            "valueQuantity": {
+              "value": 119,
+              "unit": "bpm",
+              "system": "http://unitsofmeasure.org",
+              "code": "/min"
+            },
+            "interpretation": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                    "code": "H",
+                    "display": "High"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Oxygen Saturation (SPO2)",
+          "description": "Records one Oxygen Saturation (SPO2) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "body": {
+            "resourceType": "Observation",
+            "id": "ab75532c-662f-4b0c-9495-d988b076dcd0",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:14.5898224+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-SPO2-MW1BJGES"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs",
+                    "display": "Vital Signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "59408-5",
+                  "display": "Oxygen Saturation (SpO2)"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "SPO2",
+                  "display": "Oxygen Saturation (SpO2)"
+                }
+              ],
+              "text": "Oxygen Saturation (SpO2)"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+            "valueQuantity": {
+              "value": 97,
+              "unit": "%",
+              "system": "http://unitsofmeasure.org",
+              "code": "%"
+            }
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Temperature (TEMP)",
+          "description": "Records one Temperature (TEMP) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "body": {
+            "resourceType": "Observation",
+            "id": "06db7f4d-5851-4d02-8e3c-722109d852e6",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:14.7016527+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-TEMP-MW1BJGHW"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs",
+                    "display": "Vital Signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "8310-5",
+                  "display": "Temperature"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "TEMP",
+                  "display": "Temperature"
+                }
+              ],
+              "text": "Temperature"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+            "valueQuantity": {
+              "value": 37.5,
+              "unit": "°C",
+              "system": "http://unitsofmeasure.org",
+              "code": "Cel"
+            }
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Weight (WEIGHT)",
+          "description": "Records one Weight (WEIGHT) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "body": {
+            "resourceType": "Observation",
+            "id": "aa1a4099-3255-4cf4-8743-d7a372c9ab52",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:14.8076369+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-WEIGHT-MW1BJGL6"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs",
+                    "display": "Vital Signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Weight"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "WEIGHT",
+                  "display": "Weight"
+                }
+              ],
+              "text": "Weight"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+            "valueQuantity": {
+              "value": 90,
+              "unit": "kg",
+              "system": "http://unitsofmeasure.org",
+              "code": "kg"
+            }
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Blood Glucose (GLUCOSE)",
+          "description": "Records one Blood Glucose (GLUCOSE) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "body": {
+            "resourceType": "Observation",
+            "id": "5efdcbc8-dd87-4e2f-848b-3150216bc3a5",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:14.903285+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-GLUCOSE-MW1BJGNK"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs",
+                    "display": "Vital Signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "GLUCOSE",
+                  "display": "Blood Glucose"
+                }
+              ],
+              "text": "Blood Glucose"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+            "valueQuantity": {
+              "value": 95,
+              "unit": "mg/dL",
+              "system": "http://unitsofmeasure.org",
+              "code": "mg/dL"
+            }
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Peak Flow (PF)",
+          "description": "Records one Peak Flow (PF) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nPF uses `component` with fields `per_min` and `fev1_l`, both required.",
+          "body": {
+            "resourceType": "Observation",
+            "id": "833d4f4b-6d15-46e4-a53a-a9e77b497880",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:14.9973637+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-PF-MW1BJGQ6"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs",
+                    "display": "Vital Signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "PF",
+                  "display": "Peak Flow"
+                }
+              ],
+              "text": "Peak Flow"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+            "component": [
+              {
+                "code": {
+                  "coding": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/vital-field",
+                      "code": "fev1_l",
+                      "display": "FEV1"
+                    }
+                  ],
+                  "text": "FEV1"
+                },
+                "valueQuantity": {
+                  "value": 3.2,
+                  "unit": "L",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "L"
+                }
+              },
+              {
+                "code": {
+                  "coding": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/vital-field",
+                      "code": "per_min",
+                      "display": "PEF"
+                    }
+                  ],
+                  "text": "PEF"
+                },
+                "valueQuantity": {
+                  "value": 430,
+                  "unit": "L/min",
+                  "system": "http://unitsofmeasure.org",
+                  "code": "L/min"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Blood Test – Hemoglobin (BT / hb_gdL)",
+          "description": "Records one Blood Test – Hemoglobin (BT / hb_gdL) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nBlood Test is sent as **one Observation per field**; the field code is in `code.coding` (system `http://fakeeh.example/medical-kit/vital-field`).",
+          "body": {
+            "resourceType": "Observation",
+            "id": "bc1a5b64-bee3-4e8d-9ed3-a28675c7dbb1",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:15.0955588+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BT-HB-MW1BJGST"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "laboratory",
+                    "display": "Laboratory"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "718-7",
+                  "display": "Hemoglobin"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BT",
+                  "display": "Blood Test"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-field",
+                  "code": "hb_gdL",
+                  "display": "Hemoglobin"
+                }
+              ],
+              "text": "Blood Test - Hemoglobin"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:15+03:00",
+            "valueQuantity": {
+              "value": 13.5,
+              "unit": "g/dL",
+              "system": "http://unitsofmeasure.org",
+              "code": "g/dL"
+            }
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Blood Test – Sodium (BT / na_mmoll)",
+          "description": "Records one Blood Test – Sodium (BT / na_mmoll) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).",
+          "body": {
+            "resourceType": "Observation",
+            "id": "b490b696-32f7-43d4-9893-2326dfa4a5e4",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:15.2018763+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BT-NA-MW1BJGVV"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "laboratory",
+                    "display": "Laboratory"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BT",
+                  "display": "Blood Test"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-field",
+                  "code": "na_mmoll",
+                  "display": "Sodium"
+                }
+              ],
+              "text": "Blood Test - Sodium"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:15+03:00",
+            "valueQuantity": {
+              "value": 140,
+              "unit": "mmol/L",
+              "system": "http://unitsofmeasure.org",
+              "code": "mmol/L"
+            }
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Body Composition – BMI (BC / bmi)",
+          "description": "Records one Body Composition – BMI (BC / bmi) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nBody Composition is sent as **one Observation per field**.",
+          "body": {
+            "resourceType": "Observation",
+            "id": "0851a864-fe4f-4e71-90ca-6b6ba26e8839",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:15.3143551+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BC-BMI-MW1BJGYI"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs",
+                    "display": "Vital Signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "39156-5",
+                  "display": "BMI"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BC",
+                  "display": "Body Composition"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-field",
+                  "code": "bmi",
+                  "display": "BMI"
+                }
+              ],
+              "text": "Body Composition - BMI"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:15+03:00",
+            "valueQuantity": {
+              "value": 27.4,
+              "unit": "kg/m²",
+              "system": "http://unitsofmeasure.org",
+              "code": "kg/m2"
+            }
+          }
+        },
+        {
+          "status": "201",
+          "name": "Send Body Composition – Visceral fat (BC / visceral_fat)",
+          "description": "Records one Body Composition – Visceral fat (BC / visceral_fat) reading. Returns **201 Created** with the stored Observation and a `Location` header. Re-sending the same reading identifier returns **200 OK** with the existing Observation (no duplicate is stored).\n\nUnitless level: UCUM code `{level}`.",
+          "body": {
+            "resourceType": "Observation",
+            "id": "473329f8-959c-4792-86b0-1e9ff74f9caf",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:15.4094457+00:00"
+            },
+            "identifier": [
+              {
+                "system": "http://fakeeh.example/medical-kit/reading-id",
+                "value": "KIT-BC-VF-MW1BJH1M"
+              }
+            ],
+            "status": "final",
+            "category": [
+              {
+                "coding": [
+                  {
+                    "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                    "code": "vital-signs",
+                    "display": "Vital Signs"
+                  }
+                ]
+              }
+            ],
+            "code": {
+              "coding": [
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-type",
+                  "code": "BC",
+                  "display": "Body Composition"
+                },
+                {
+                  "system": "http://fakeeh.example/medical-kit/vital-field",
+                  "code": "visceral_fat",
+                  "display": "Visceral fat level"
+                }
+              ],
+              "text": "Body Composition - Visceral fat level"
+            },
+            "subject": {
+              "reference": "Patient/2627530575",
+              "identifier": {
+                "value": "2627530575"
+              }
+            },
+            "effectiveDateTime": "2026-11-04T02:28:15+03:00",
+            "valueQuantity": {
+              "value": 9,
+              "unit": "level",
+              "system": "http://unitsofmeasure.org",
+              "code": "{level}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "key": "POST /fhir/Observation/_search",
+      "tag": "5. Previous readings",
+      "summary": "Search a patient's stored readings.",
+      "description": "`GET /fhir/Observation` searches stored readings for one patient. `patient` is required. Results come in a `searchset` Bundle with `total` and `next`/`previous` links.",
+      "requests": [
+        {
+          "name": "All readings for patient (newest first, paged)",
+          "description": "`_sort=-date` (default) or `date`. Page with `_count` and `_offset` in the body. Do not follow the `next` link if it is a GET URL: it would put the patient id in the URL. Ask the server to return an opaque `next` link or keep using `_offset`.",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": {
+            "patient": "Patient/2627530575",
+            "_sort": "-date",
+            "_count": "20",
+            "_offset": "0"
+          }
+        },
+        {
+          "name": "Readings by vital type (local code)",
+          "description": "`code` accepts a vital type code (BP, HR, …) or `system|code`.",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": {
+            "patient": "Patient/2627530575",
+            "code": "BP"
+          }
+        },
+        {
+          "name": "Readings by LOINC code",
+          "description": "",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": {
+            "patient": "Patient/2627530575",
+            "code": "http://loinc.org|8867-4"
+          }
+        },
+        {
+          "name": "Readings by category and date range",
+          "description": "`category` is `vital-signs` or `laboratory`. `date` supports `ge`, `gt`, `le`, `lt` prefixes and is sent twice (two form fields with the same name) for a range.",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": {
+            "patient": "Patient/2627530575",
+            "category": "laboratory",
+            "date": [
+              "ge2026-10-01",
+              "le2026-12-31"
+            ]
+          }
+        },
+        {
+          "name": "Find one reading by id (_id)",
+          "description": "`observationId` is set by any of the single-Observation requests in folder 4. Fetched with `_id` in the form body (no POST read in FHIR).",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": {
+            "_id": "473329f8-959c-4792-86b0-1e9ff74f9caf"
+          }
+        }
+      ],
+      "headers": [],
+      "responses": [
+        {
+          "status": "200",
+          "name": "All readings for patient (newest first, paged)",
+          "description": "`_sort=-date` (default) or `date`. Page with `_count` and `_offset` in the body. Do not follow the `next` link if it is a GET URL: it would put the patient id in the URL. Ask the server to return an opaque `next` link or keep using `_offset`.",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "8295752b-dc6d-4819-b3cb-6a9fd8d9dfea",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:15.6106735+00:00"
+            },
+            "type": "searchset",
+            "total": 49,
+            "link": [
+              {
+                "relation": "self",
+                "url": "https://localhost:7006/fhir/Observation/_search?_page=CfDJ8AFiPsVDB1NNmqYrudLpyFhzAXmswNuKeNdRhRq1ya28DRp8enbKuXcq8dq3dAr-Fg27b5lOieFsyl3yWiie3lD-__uFQN5p2FXJBY2KcsgNIydPzaAJzmyFUt9CNVExysfmJosxrqUCKQmnLJMzCaTfERrb3_s9Lpce8W4rOXb6k0YJj2tT_chCGhuIVeVrqpj1sOYqi_DiurwRzOscWQBv9M08AoPmc1qixNF4dznXmDuba6KaIOjESNX7mQediYXXWHKxDjjiKDnrCB4rJB4"
+              },
+              {
+                "relation": "next",
+                "url": "https://localhost:7006/fhir/Observation/_search?_page=CfDJ8AFiPsVDB1NNmqYrudLpyFjMC7-s0Aa8PEt232PMxVXzadugC8uQFHUYuQrZr7s3VdQdvQchLoIASHz6fmP24zNPGH7EVmYZ3D7P3kCVfP_IaxrJGrlFt3TAUcusnbbn_XskYtiVhhsThD-RK2S0BKwXTyW_uImFpEReJU2Lbr02-oS5hmedJmNZVl60_Yny3La2a_-EGPB645RDGDBvHkxcLKNImWLvDvDNFRqAcL9M7xH1jFqSR1N8nqlWFoHoc--yl1FbGukAyKIx5XVsMTM"
+              }
+            ],
+            "entry": [
+              {
+                "fullUrl": "https://localhost:7006/fhir/Observation/e7b6d894-68f6-4a80-9763-5afc8a499b71",
+                "resource": {
+                  "resourceType": "Observation",
+                  "id": "e7b6d894-68f6-4a80-9763-5afc8a499b71",
+                  "meta": {
+                    "lastUpdated": "2026-11-03T23:20:00.1635611+00:00"
+                  },
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "JSON-BT-1793748000"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "laboratory",
+                          "display": "Laboratory"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BT",
+                        "display": "Blood Test"
+                      }
+                    ],
+                    "text": "Blood Test"
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575",
+                    "identifier": {
+                      "value": "2627530575"
+                    }
+                  },
+                  "effectiveDateTime": "2026-11-04T09:00:00+03:00",
+                  "component": [
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://loinc.org",
+                            "code": "718-7",
+                            "display": "Hemoglobin"
+                          },
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "hb_gdL",
+                            "display": "Hemoglobin"
+                          }
+                        ],
+                        "text": "Hemoglobin"
+                      },
+                      "valueQuantity": {
+                        "value": 12.1,
+                        "unit": "g/dL",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "g/dL"
+                      }
+                    },
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "k_mmoll",
+                            "display": "Potassium"
+                          }
+                        ],
+                        "text": "Potassium"
+                      },
+                      "valueQuantity": {
+                        "value": 4.2,
+                        "unit": "mmol/L",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "mmol/L"
+                      }
+                    }
+                  ]
+                },
+                "search": {
+                  "mode": "match"
+                }
+              },
+              {
+                "fullUrl": "https://localhost:7006/fhir/Observation/473329f8-959c-4792-86b0-1e9ff74f9caf",
+                "resource": {
+                  "resourceType": "Observation",
+                  "id": "473329f8-959c-4792-86b0-1e9ff74f9caf",
+                  "meta": {
+                    "lastUpdated": "2026-11-03T23:28:15.4094457+00:00"
+                  },
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BC-VF-MW1BJH1M"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs",
+                          "display": "Vital Signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BC",
+                        "display": "Body Composition"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-field",
+                        "code": "visceral_fat",
+                        "display": "Visceral fat level"
+                      }
+                    ],
+                    "text": "Body Composition - Visceral fat level"
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575",
+                    "identifier": {
+                      "value": "2627530575"
+                    }
+                  },
+                  "effectiveDateTime": "2026-11-04T02:28:15+03:00",
+                  "valueQuantity": {
+                    "value": 9,
+                    "unit": "level",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "{level}"
+                  }
+                },
+                "search": {
+                  "mode": "match"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "200",
+          "name": "Readings by vital type (local code)",
+          "description": "`code` accepts a vital type code (BP, HR, …) or `system|code`.",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "233d80f2-d14f-4fcf-b61c-7e811b3003c9",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:15.7861563+00:00"
+            },
+            "type": "searchset",
+            "total": 4,
+            "link": [
+              {
+                "relation": "self",
+                "url": "https://localhost:7006/fhir/Observation/_search?_page=CfDJ8AFiPsVDB1NNmqYrudLpyFjqRR0S20G0FfZyISmZ2l5Mfeav1fawAZ-KTHbCjvRGbCrM-Oz0y0I0qh6fQhuSS_5-9wYaOH6fYijP6LAkmIxyjMvD6ZbTzRvkscd5M3BBgEvICwEASZ52p-Ffqg8C1oDAqOyY1C7iHKvcToy0iLKtT34TbglAnKb0XaVi1u60xy8wVaqJACr-jXd61fxzuBlCejZcNGUajvWeWX43V0uJ2-7I6WFld5ttSGGJQ30JNWUO-FuUzKilkb3Y9UVPS30"
+              }
+            ],
+            "entry": [
+              {
+                "fullUrl": "https://localhost:7006/fhir/Observation/9f5a2005-bb4a-4f09-aa6a-7d6f441b69af",
+                "resource": {
+                  "resourceType": "Observation",
+                  "id": "9f5a2005-bb4a-4f09-aa6a-7d6f441b69af",
+                  "meta": {
+                    "lastUpdated": "2026-11-03T23:28:14.3532894+00:00"
+                  },
+                  "extension": [
+                    {
+                      "url": "http://fakeeh.example/fhir/StructureDefinition/reading-address",
+                      "valueString": "السعوديه , الرياض"
+                    }
+                  ],
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BP-MW1BJG85"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs",
+                          "display": "Vital Signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "85354-9",
+                        "display": "Blood Pressure"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BP",
+                        "display": "Blood Pressure"
+                      }
+                    ],
+                    "text": "Blood Pressure"
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575",
+                    "identifier": {
+                      "value": "2627530575"
+                    }
+                  },
+                  "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+                  "note": [
+                    {
+                      "text": "قراءة ضغط الدم من جهاز الموبايل"
+                    }
+                  ],
+                  "component": [
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://loinc.org",
+                            "code": "8480-6",
+                            "display": "Systolic"
+                          },
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "systolic",
+                            "display": "Systolic"
+                          }
+                        ],
+                        "text": "Systolic"
+                      },
+                      "valueQuantity": {
+                        "value": 121,
+                        "unit": "mmHg",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "mm[Hg]"
+                      }
+                    },
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://loinc.org",
+                            "code": "8462-4",
+                            "display": "Diastolic"
+                          },
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "diastolic",
+                            "display": "Diastolic"
+                          }
+                        ],
+                        "text": "Diastolic"
+                      },
+                      "valueQuantity": {
+                        "value": 81,
+                        "unit": "mmHg",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "mm[Hg]"
+                      }
+                    }
+                  ]
+                },
+                "search": {
+                  "mode": "match"
+                }
+              },
+              {
+                "fullUrl": "https://localhost:7006/fhir/Observation/6d07e84c-c38b-4634-a7bf-93bc99ed7489",
+                "resource": {
+                  "resourceType": "Observation",
+                  "id": "6d07e84c-c38b-4634-a7bf-93bc99ed7489",
+                  "meta": {
+                    "lastUpdated": "2026-11-03T23:28:13.6724308+00:00"
+                  },
+                  "extension": [
+                    {
+                      "url": "http://fakeeh.example/fhir/StructureDefinition/reading-address",
+                      "valueString": "السعوديه , الرياض"
+                    }
+                  ],
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BP-MW1BJFJ2"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs",
+                          "display": "Vital Signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "85354-9",
+                        "display": "Blood Pressure"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BP",
+                        "display": "Blood Pressure"
+                      }
+                    ],
+                    "text": "Blood Pressure"
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575",
+                    "identifier": {
+                      "value": "2627530575"
+                    }
+                  },
+                  "effectiveDateTime": "2026-11-04T02:28:13+03:00",
+                  "note": [
+                    {
+                      "text": "قراءة ضغط الدم من جهاز الموبايل"
+                    }
+                  ],
+                  "component": [
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://loinc.org",
+                            "code": "8480-6",
+                            "display": "Systolic"
+                          },
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "systolic",
+                            "display": "Systolic"
+                          }
+                        ],
+                        "text": "Systolic"
+                      },
+                      "valueQuantity": {
+                        "value": 121,
+                        "unit": "mmHg",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "mm[Hg]"
+                      }
+                    },
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://loinc.org",
+                            "code": "8462-4",
+                            "display": "Diastolic"
+                          },
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "diastolic",
+                            "display": "Diastolic"
+                          }
+                        ],
+                        "text": "Diastolic"
+                      },
+                      "valueQuantity": {
+                        "value": 81,
+                        "unit": "mmHg",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "mm[Hg]"
+                      }
+                    }
+                  ]
+                },
+                "search": {
+                  "mode": "match"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "200",
+          "name": "Readings by LOINC code",
+          "description": "",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "af03cd58-2f7c-4a14-be1b-9084c277c34c",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:15.8909407+00:00"
+            },
+            "type": "searchset",
+            "total": 6,
+            "link": [
+              {
+                "relation": "self",
+                "url": "https://localhost:7006/fhir/Observation/_search?_page=CfDJ8AFiPsVDB1NNmqYrudLpyFjMq5ZionPYV8W0C-OV-NTfuPDNcVNnVhhfAVBqK8_8XS97UOsg7nxH_qO5AXCA1kDNLhx4gJkuwkdGneQcfeXT6WJ19BmUt61NS7crf-IuypBByuCMPO3w6G1ABVMDDPiaMPkHDqOKsspJv-X8igBrnT-OpGvHqhfBjnyjq4t-Maky81gHJ6DfBl9gGr6w_8rdIkIUH0y0YtkKpah7ADNF8tQ9QY3JTz3MINLdXr-s5Pk6vZtHrMDXLDnSniEQghBxB5_M5SsRiAd01fL3ECLH"
+              }
+            ],
+            "entry": [
+              {
+                "fullUrl": "https://localhost:7006/fhir/Observation/761d6707-5f06-4e3a-b072-4e2434c2f00e",
+                "resource": {
+                  "resourceType": "Observation",
+                  "id": "761d6707-5f06-4e3a-b072-4e2434c2f00e",
+                  "meta": {
+                    "lastUpdated": "2026-11-03T23:28:14.4759341+00:00"
+                  },
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-HR-MW1BJGC4"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs",
+                          "display": "Vital Signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "8867-4",
+                        "display": "Heart Rate"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "HR",
+                        "display": "Heart Rate"
+                      }
+                    ],
+                    "text": "Heart Rate"
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575",
+                    "identifier": {
+                      "value": "2627530575"
+                    }
+                  },
+                  "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+                  "valueQuantity": {
+                    "value": 119,
+                    "unit": "bpm",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "/min"
+                  },
+                  "interpretation": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                          "code": "H",
+                          "display": "High"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "search": {
+                  "mode": "match"
+                }
+              },
+              {
+                "fullUrl": "https://localhost:7006/fhir/Observation/51a0a092-8287-470a-847b-94ab11e34af1",
+                "resource": {
+                  "resourceType": "Observation",
+                  "id": "51a0a092-8287-470a-847b-94ab11e34af1",
+                  "meta": {
+                    "lastUpdated": "2026-11-03T23:28:14.2321256+00:00"
+                  },
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-OK-MW1BJG53"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs",
+                          "display": "Vital Signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://loinc.org",
+                        "code": "8867-4",
+                        "display": "Heart Rate"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "HR",
+                        "display": "Heart Rate"
+                      }
+                    ],
+                    "text": "Heart Rate"
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575",
+                    "identifier": {
+                      "value": "2627530575"
+                    }
+                  },
+                  "effectiveDateTime": "2026-11-04T02:28:14+03:00",
+                  "valueQuantity": {
+                    "value": 72,
+                    "unit": "bpm",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "/min"
+                  }
+                },
+                "search": {
+                  "mode": "match"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "200",
+          "name": "Readings by category and date range",
+          "description": "`category` is `vital-signs` or `laboratory`. `date` supports `ge`, `gt`, `le`, `lt` prefixes and is sent twice (two form fields with the same name) for a range.",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "1845e4f6-5e19-4c3d-9562-f2f836fba651",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:16.0094461+00:00"
+            },
+            "type": "searchset",
+            "total": 9,
+            "link": [
+              {
+                "relation": "self",
+                "url": "https://localhost:7006/fhir/Observation/_search?_page=CfDJ8AFiPsVDB1NNmqYrudLpyFiHcTDmwLlemmHWcj7GTaN24QZQrdrsFeGVdHyeYqBD2UyWNC-4Wt-Q0Tq781Fn1yfv16JNxXVsjx5PMI9fTbR2BbP3xZDnr734kEdxbEuohRuyEnlMPV3t3qo49VPcP69HpNBOBuau0ktGfyiSr9TQa3elPqChlj5cGbqR6xtfjhMGzaq6cWQax_7icCpX2wIoFRQ8rauNdHknuVmwpjp8lFsH48AcMjg5HbFH-JdNgeruZ4iFqb0xtJ_5Ugf1plGVP6V3ai8zU9TU2NF-EZipDlRVCSQ1Y0KwbhZv1X96uBWFLU9BkGAUTQjn1Wv1MvCbvXb7nUJFD-cWvDCQC4TC"
+              }
+            ],
+            "entry": [
+              {
+                "fullUrl": "https://localhost:7006/fhir/Observation/e7b6d894-68f6-4a80-9763-5afc8a499b71",
+                "resource": {
+                  "resourceType": "Observation",
+                  "id": "e7b6d894-68f6-4a80-9763-5afc8a499b71",
+                  "meta": {
+                    "lastUpdated": "2026-11-03T23:20:00.1635611+00:00"
+                  },
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "JSON-BT-1793748000"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "laboratory",
+                          "display": "Laboratory"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BT",
+                        "display": "Blood Test"
+                      }
+                    ],
+                    "text": "Blood Test"
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575",
+                    "identifier": {
+                      "value": "2627530575"
+                    }
+                  },
+                  "effectiveDateTime": "2026-11-04T09:00:00+03:00",
+                  "component": [
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://loinc.org",
+                            "code": "718-7",
+                            "display": "Hemoglobin"
+                          },
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "hb_gdL",
+                            "display": "Hemoglobin"
+                          }
+                        ],
+                        "text": "Hemoglobin"
+                      },
+                      "valueQuantity": {
+                        "value": 12.1,
+                        "unit": "g/dL",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "g/dL"
+                      }
+                    },
+                    {
+                      "code": {
+                        "coding": [
+                          {
+                            "system": "http://fakeeh.example/medical-kit/vital-field",
+                            "code": "k_mmoll",
+                            "display": "Potassium"
+                          }
+                        ],
+                        "text": "Potassium"
+                      },
+                      "valueQuantity": {
+                        "value": 4.2,
+                        "unit": "mmol/L",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "mmol/L"
+                      }
+                    }
+                  ]
+                },
+                "search": {
+                  "mode": "match"
+                }
+              },
+              {
+                "fullUrl": "https://localhost:7006/fhir/Observation/b490b696-32f7-43d4-9893-2326dfa4a5e4",
+                "resource": {
+                  "resourceType": "Observation",
+                  "id": "b490b696-32f7-43d4-9893-2326dfa4a5e4",
+                  "meta": {
+                    "lastUpdated": "2026-11-03T23:28:15.2018763+00:00"
+                  },
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BT-NA-MW1BJGVV"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "laboratory",
+                          "display": "Laboratory"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BT",
+                        "display": "Blood Test"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-field",
+                        "code": "na_mmoll",
+                        "display": "Sodium"
+                      }
+                    ],
+                    "text": "Blood Test - Sodium"
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575",
+                    "identifier": {
+                      "value": "2627530575"
+                    }
+                  },
+                  "effectiveDateTime": "2026-11-04T02:28:15+03:00",
+                  "valueQuantity": {
+                    "value": 140,
+                    "unit": "mmol/L",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "mmol/L"
+                  }
+                },
+                "search": {
+                  "mode": "match"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "status": "200",
+          "name": "Find one reading by id (_id)",
+          "description": "`observationId` is set by any of the single-Observation requests in folder 4. Fetched with `_id` in the form body (no POST read in FHIR).",
+          "body": {
+            "resourceType": "Bundle",
+            "id": "d53b8c8e-c898-42ce-bfc2-1f8ff44d6a16",
+            "meta": {
+              "lastUpdated": "2026-11-03T23:28:16.1345169+00:00"
+            },
+            "type": "searchset",
+            "total": 1,
+            "link": [
+              {
+                "relation": "self",
+                "url": "https://localhost:7006/fhir/Observation/_search?_page=CfDJ8AFiPsVDB1NNmqYrudLpyFiGKS74efxUaj8CiPo62DFoVBzTA0rGiaqbVuUZWz-CkcSx-tFRYqy3MeNfSgVGn_FiTn-eXQlg6ABMUTnlJxEHfRk5gKJ7GXxdHjnuLsT-yDW6T2dYf7mynJkuyQDCQYq86wbMA-ecwkf8D_3fhRy5XffvA_oquY0NH1lj_oRkggQRW1oghmbGl1Qx6YPUjFHQieVl3HpG3_uMIrDWRwzGm6XlGv7G-GF6dUKRCMpILBBLPdcEMVieVly_UTzICM4"
+              }
+            ],
+            "entry": [
+              {
+                "fullUrl": "https://localhost:7006/fhir/Observation/473329f8-959c-4792-86b0-1e9ff74f9caf",
+                "resource": {
+                  "resourceType": "Observation",
+                  "id": "473329f8-959c-4792-86b0-1e9ff74f9caf",
+                  "meta": {
+                    "lastUpdated": "2026-11-03T23:28:15.4094457+00:00"
+                  },
+                  "identifier": [
+                    {
+                      "system": "http://fakeeh.example/medical-kit/reading-id",
+                      "value": "KIT-BC-VF-MW1BJH1M"
+                    }
+                  ],
+                  "status": "final",
+                  "category": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                          "code": "vital-signs",
+                          "display": "Vital Signs"
+                        }
+                      ]
+                    }
+                  ],
+                  "code": {
+                    "coding": [
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-type",
+                        "code": "BC",
+                        "display": "Body Composition"
+                      },
+                      {
+                        "system": "http://fakeeh.example/medical-kit/vital-field",
+                        "code": "visceral_fat",
+                        "display": "Visceral fat level"
+                      }
+                    ],
+                    "text": "Body Composition - Visceral fat level"
+                  },
+                  "subject": {
+                    "reference": "Patient/2627530575",
+                    "identifier": {
+                      "value": "2627530575"
+                    }
+                  },
+                  "effectiveDateTime": "2026-11-04T02:28:15+03:00",
+                  "valueQuantity": {
+                    "value": 9,
+                    "unit": "level",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "{level}"
+                  }
+                },
+                "search": {
+                  "mode": "match"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

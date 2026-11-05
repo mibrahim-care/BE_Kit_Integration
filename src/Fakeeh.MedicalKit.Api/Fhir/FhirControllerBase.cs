@@ -7,7 +7,6 @@ namespace Fakeeh.MedicalKit.Api.Fhir;
 
 /// <summary>Base for the FHIR R4 endpoints under /fhir. Bodies are read and written as application/fhir+json.</summary>
 [ApiController]
-[ApiExplorerSettings(IgnoreApi = true)]
 public abstract class FhirControllerBase : ControllerBase
 {
     protected string FhirBaseUrl => $"{Request.Scheme}://{Request.Host}{Request.PathBase}/{FhirConstants.RoutePrefix}";

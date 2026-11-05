@@ -65,8 +65,12 @@ public sealed class ObservationController(
     public async Task<IActionResult> Search(CancellationToken cancellationToken) =>
         await SearchAsync(await ReadSearchParametersAsync(cancellationToken), cancellationToken);
 
-    /// <summary>Follows a self / previous / next link with GET. Only the opaque _page token is accepted in the URL.</summary>
+    /// <summary>
+    /// Follows a self / previous / next link with GET. Only the opaque _page token is accepted in the URL.
+    /// Not in Swagger: the KIT collection searches with POST only, and POST accepts the same _page links.
+    /// </summary>
     [HttpGet("_search")]
+    [ApiExplorerSettings(IgnoreApi = true)]
     public async Task<IActionResult> SearchPage(CancellationToken cancellationToken)
     {
         var parameters = await ReadSearchParametersAsync(cancellationToken);
