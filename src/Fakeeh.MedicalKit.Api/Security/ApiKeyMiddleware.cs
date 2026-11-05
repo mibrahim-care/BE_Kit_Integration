@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
+using Fakeeh.MedicalKit.Api.Fhir;
 using Fakeeh.MedicalKit.Api.Http;
+using Hl7.Fhir.Model;
 using Microsoft.Extensions.Options;
 
 namespace Fakeeh.MedicalKit.Api.Security;
@@ -20,9 +22,10 @@ public sealed class ApiClient
     public string Key { get; set; } = string.Empty;
 }
 
+/// <summary>Requires a valid X-Api-Key on /api and /fhir, except the public GET /fhir/metadata.</summary>
 public sealed class ApiKeyMiddleware(RequestDelegate next, IOptionsMonitor<ApiKeyOptions> options)
 {
-    public async Task InvokeAsync(HttpContext context)
+    public async System.Threading.Tasks.Task InvokeAsync(HttpContext context)
     {
         if (!RequiresKey(context.Request))
         {
@@ -39,6 +42,15 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptionsMonitor<ApiKe
                 ? $"Missing {ApiKeyOptions.HeaderName} header."
                 : $"Invalid {ApiKeyOptions.HeaderName} header.";
 
+            if (FhirConstants.IsFhirRequest(context.Request))
+            {
+                await FhirJson.WriteAsync(
+                    context,
+                    OperationOutcomes.Single(OperationOutcome.IssueType.Security, message, code: "security.api_key"),
+                    StatusCodes.Status401Unauthorized);
+                return;
+            }
+
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsJsonAsync(ErrorResponse.Single("security.api_key", message), context.RequestAborted);
             return;
@@ -49,7 +61,9 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptionsMonitor<ApiKe
     }
 
     private static bool RequiresKey(HttpRequest request) =>
-        !HttpMethods.IsOptions(request.Method) && request.Path.StartsWithSegments("/api");
+        !HttpMethods.IsOptions(request.Method)
+        && (request.Path.StartsWithSegments("/api")
+            || (FhirConstants.IsFhirRequest(request) && !request.Path.StartsWithSegments($"/{FhirConstants.RoutePrefix}/metadata")));
 
     private ApiClient? FindClient(string provided)
     {

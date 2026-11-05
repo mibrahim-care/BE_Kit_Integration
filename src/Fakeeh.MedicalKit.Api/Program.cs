@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Fakeeh.MedicalKit.Api.Fhir;
 using Fakeeh.MedicalKit.Api.Http;
 using Fakeeh.MedicalKit.Api.Security;
 using Fakeeh.MedicalKit.Api.Swagger;
@@ -14,6 +15,7 @@ const string PortalCorsPolicy = "Portal";
 builder.Services.AddApplication(
     builder.Configuration.GetSection(ReadingSettings.SectionName).Get<ReadingSettings>());
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddFhirApi(builder.Configuration);
 builder.Services.AddSwagger();
 
 builder.Services
@@ -53,8 +55,9 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy(PortalCorsPolicy, policy => policy
         .WithOrigins(builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [])
-        .WithHeaders("Content-Type", "Accept", ApiKeyOptions.HeaderName)
-        .WithMethods("POST"));
+        .WithHeaders("Content-Type", "Accept", ApiKeyOptions.HeaderName, "If-None-Exist")
+        .WithMethods("GET", "POST")
+        .WithExposedHeaders("Location"));
 });
 
 var app = builder.Build();

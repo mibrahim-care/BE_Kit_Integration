@@ -20,6 +20,7 @@ public static class DependencyInjection
 
         services.AddValidatorsFromAssembly(assembly, includeInternalTypes: true);
         services.AddSingleton(readingSettings ?? new ReadingSettings());
+        services.AddScoped<Observations.ObservationResolver>();
 
         return services;
     }
