@@ -1,5 +1,6 @@
 using Fakeeh.MedicalKit.Application.Abstractions;
 using Fakeeh.MedicalKit.Application.Common;
+using Fakeeh.MedicalKit.Application.Readings;
 using Fakeeh.MedicalKit.Domain.Common;
 using FluentValidation;
 using MediatR;
@@ -29,12 +30,19 @@ public sealed record SearchObservationsQuery : IRequest<Result<PagedList<Observa
     public int Offset { get; init; }
 
     public int Count { get; init; } = DefaultCount;
+
+    /// <summary>Optional: a page per vital type, up to this many readings of each type. <see cref="Offset"/> then applies within each type.</summary>
+    public int? RecordsPerType { get; init; }
 }
 
 internal sealed class SearchObservationsQueryValidator : AbstractValidator<SearchObservationsQuery>
 {
-    public SearchObservationsQueryValidator()
+    public SearchObservationsQueryValidator(ReadingSettings settings)
     {
+        RuleFor(q => q.RecordsPerType).InclusiveBetween(1, settings.MaxRecordsPerType)
+            .WithErrorCode("search.records_per_type_invalid")
+            .WithMessage($"recordsPerType must be between 1 and {settings.MaxRecordsPerType}.")
+            .OverridePropertyName("recordsPerType");
         RuleFor(q => q.PatientId)
             .NotEmpty().When(q => q.Id is null).WithErrorCode("search.patient_required")
             .WithMessage("The 'patient' search parameter is required, e.g. patient=Patient/1234567890.")
@@ -73,7 +81,8 @@ internal sealed class SearchObservationsQueryHandler(
                 To = request.To,
                 SortDescending = request.SortDescending,
                 Offset = request.Offset,
-                Count = request.Count
+                Count = request.RecordsPerType ?? request.Count,
+                RecordsPerType = request.RecordsPerType
             },
             cancellationToken);
 

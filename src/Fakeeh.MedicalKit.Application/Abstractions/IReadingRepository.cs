@@ -50,4 +50,10 @@ public sealed record ReadingSearchCriteria
     public int Offset { get; init; }
 
     public int Count { get; init; } = 20;
+
+    /// <summary>
+    /// When set, paging is per vital type: up to this many readings of each vital type, skipping <see cref="Offset"/>
+    /// readings within each type. <see cref="Count"/> is then ignored.
+    /// </summary>
+    public int? RecordsPerType { get; init; }
 }

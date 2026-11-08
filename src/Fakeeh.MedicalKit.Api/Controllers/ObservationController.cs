@@ -18,6 +18,7 @@ public sealed class ObservationController(
     PageLinkProtector pageLinks) : FhirControllerBase
 {
     private const string ResourceType = "Observation";
+    private const string RecordsPerTypeParameter = "recordsPerType";
 
     /// <summary>
     /// Records one reading. 201 with the stored Observation and a Location header; re-sending the same reading
@@ -59,7 +60,7 @@ public sealed class ObservationController(
 
     /// <summary>
     /// POST Observation/_search with the parameters in a form body: patient, _id, code, category, date (repeatable),
-    /// _sort, _count, _offset; or _page from a paging link.
+    /// _sort, _count, _offset, recordsPerType; or _page from a paging link.
     /// </summary>
     [HttpPost("_search")]
     public async Task<IActionResult> Search(CancellationToken cancellationToken) =>
@@ -144,6 +145,18 @@ public sealed class ObservationController(
             return FhirBadRequest("_offset must be a whole number.", "search.offset_invalid");
         }
 
+        if (!TryParseOptionalInt(parameters.First(RecordsPerTypeParameter), out var recordsPerType))
+        {
+            return FhirBadRequest("recordsPerType must be a whole number.", "search.records_per_type_invalid");
+        }
+
+        if (recordsPerType is not null && parameters.Has("_count"))
+        {
+            return FhirBadRequest(
+                "Send either _count (one page across all vital types) or recordsPerType (a page per vital type), not both.",
+                "search.count_with_records_per_type");
+        }
+
         var result = await sender.Send(new SearchObservationsQuery
         {
             PatientId = patientId,
@@ -154,7 +167,8 @@ public sealed class ObservationController(
             To = range.To,
             SortDescending = sort != "date",
             Offset = offset,
-            Count = count
+            Count = count,
+            RecordsPerType = recordsPerType
         }, cancellationToken);
 
         if (result.IsFailure)
@@ -166,13 +180,30 @@ public sealed class ObservationController(
         var pageBase = parameters.Without("_count", "_offset", PageLinkProtector.ParameterName);
         string PageUrl(int pageOffset)
         {
-            var page = pageBase
-                .With("_count", count.ToString(CultureInfo.InvariantCulture))
+            // With recordsPerType (kept in pageBase) the offset steps per vital type and _count is not added.
+            var page = (recordsPerType is null ? pageBase.With("_count", count.ToString(CultureInfo.InvariantCulture)) : pageBase)
                 .With("_offset", pageOffset.ToString(CultureInfo.InvariantCulture));
             return $"{FhirBaseUrl}/Observation/_search?{PageLinkProtector.ParameterName}={Uri.EscapeDataString(pageLinks.Protect(ResourceType, page))}";
         }
 
         return Fhir(SearchBundleBuilder.Build(result.Value, r => mapper.ToFhir(r), FhirBaseUrl, PageUrl));
+    }
+
+    private static bool TryParseOptionalInt(string? value, out int? result)
+    {
+        result = null;
+        if (value is null)
+        {
+            return true;
+        }
+
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return false;
+        }
+
+        result = parsed;
+        return true;
     }
 
     private static bool TryParseInt(string? value, int fallback, out int result)

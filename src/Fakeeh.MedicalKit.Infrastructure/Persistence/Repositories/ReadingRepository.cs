@@ -94,13 +94,14 @@ internal sealed class ReadingRepository(IntegrationDbContext db) : IReadingRepos
             query = query.Where(r => r.EffectiveAt < to);
         }
 
+        if (criteria.RecordsPerType is { } perType)
+        {
+            return await SearchPerTypeAsync(query, criteria, perType, cancellationToken);
+        }
+
         var total = await query.CountAsync(cancellationToken);
 
-        query = criteria.SortDescending
-            ? query.OrderByDescending(r => r.EffectiveAt).ThenByDescending(r => r.ReceivedAt).ThenBy(r => r.Id)
-            : query.OrderBy(r => r.EffectiveAt).ThenBy(r => r.ReceivedAt).ThenBy(r => r.Id);
-
-        var items = await query
+        var items = await Order(query, criteria.SortDescending)
             .Skip(criteria.Offset)
             .Take(criteria.Count)
             .AsSplitQuery()
@@ -108,4 +109,47 @@ internal sealed class ReadingRepository(IntegrationDbContext db) : IReadingRepos
 
         return new PagedList<Reading>(items, total, criteria.Offset, criteria.Count);
     }
+
+    /// <summary>
+    /// Pages each vital type on its own: skips <c>Offset</c> and takes <paramref name="perType"/> readings of every type.
+    /// Results are grouped by vital type and sorted by date within each type.
+    /// </summary>
+    private static async Task<PagedList<Reading>> SearchPerTypeAsync(
+        IQueryable<Reading> query, ReadingSearchCriteria criteria, int perType, CancellationToken cancellationToken)
+    {
+        var countsPerType = await query
+            .GroupBy(r => r.VitalTypeCode)
+            .Select(g => g.Count())
+            .ToListAsync(cancellationToken);
+
+        var total = countsPerType.Sum();
+        var hasMore = countsPerType.Any(c => c > criteria.Offset + perType);
+
+        if (!countsPerType.Any(c => c > criteria.Offset))
+        {
+            return new PagedList<Reading>([], total, criteria.Offset, perType) { HasMore = hasMore };
+        }
+
+        // One CROSS APPLY per vital type (as in GetLatestPerTypeAsync), with OFFSET … FETCH inside each.
+        var items = await query
+            .Select(r => r.VitalTypeCode)
+            .Distinct()
+            .SelectMany(typeCode => Order(query.Where(r => r.VitalTypeCode == typeCode), criteria.SortDescending)
+                .Skip(criteria.Offset)
+                .Take(perType))
+            .AsSplitQuery()
+            .ToListAsync(cancellationToken);
+
+        var byType = items.OrderBy(r => r.VitalTypeCode, StringComparer.OrdinalIgnoreCase);
+        var sorted = criteria.SortDescending
+            ? byType.ThenByDescending(r => r.EffectiveAt).ThenByDescending(r => r.ReceivedAt).ThenBy(r => r.Id)
+            : byType.ThenBy(r => r.EffectiveAt).ThenBy(r => r.ReceivedAt).ThenBy(r => r.Id);
+
+        return new PagedList<Reading>(sorted.ToList(), total, criteria.Offset, perType) { HasMore = hasMore };
+    }
+
+    private static IOrderedQueryable<Reading> Order(IQueryable<Reading> query, bool descending) =>
+        descending
+            ? query.OrderByDescending(r => r.EffectiveAt).ThenByDescending(r => r.ReceivedAt).ThenBy(r => r.Id)
+            : query.OrderBy(r => r.EffectiveAt).ThenBy(r => r.ReceivedAt).ThenBy(r => r.Id);
 }

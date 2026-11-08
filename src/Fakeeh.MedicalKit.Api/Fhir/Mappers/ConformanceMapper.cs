@@ -1,9 +1,10 @@
+using Fakeeh.MedicalKit.Application.Readings;
 using Fakeeh.MedicalKit.Application.VitalTypes;
 using Hl7.Fhir.Model;
 
 namespace Fakeeh.MedicalKit.Api.Fhir.Mappers;
 
-public sealed class ConformanceMapper(FhirOptions options)
+public sealed class ConformanceMapper(FhirOptions options, ReadingSettings readingSettings)
 {
     public CapabilityStatement BuildCapabilityStatement(string baseUrl)
     {
@@ -15,7 +16,11 @@ public sealed class ConformanceMapper(FhirOptions options)
             SearchParam("category", SearchParamType.Token, "vital-signs | laboratory"),
             SearchParam("date", SearchParamType.Date, "effectiveDateTime; repeatable; prefixes eq, ge, gt, le, lt."),
             SearchParam("_count", SearchParamType.Number, $"Page size (default {Application.Observations.SearchObservationsQuery.DefaultCount}, max {Application.Observations.SearchObservationsQuery.MaxCount})."),
-            SearchParam("_offset", SearchParamType.Number, "Number of results to skip."),
+            SearchParam("_offset", SearchParamType.Number, "Number of results to skip (within each vital type when recordsPerType is sent)."),
+            SearchParam("recordsPerType", SearchParamType.Number,
+                $"Page per vital type: up to this many readings of each vital type (1-{readingSettings.MaxRecordsPerType}), " +
+                "grouped by type and sorted by _sort within each type. _offset then skips readings within each type and " +
+                "the next / previous links step by recordsPerType. Do not send together with _count."),
             SearchParam("_sort", SearchParamType.String, "-date (default) or date."),
             SearchParam("_page", SearchParamType.String, "Opaque token from a self / previous / next link of a previous search.")
         };
