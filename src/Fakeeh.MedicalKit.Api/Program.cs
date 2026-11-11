@@ -54,9 +54,10 @@ builder.Services.Configure<ApiKeyOptions>(builder.Configuration.GetSection(ApiKe
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(PortalCorsPolicy, policy => policy
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowAnyOrigin());
+        .WithOrigins(builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [])
+        .WithHeaders("Content-Type", "Accept", ApiKeyOptions.HeaderName, "If-None-Exist")
+        .WithMethods("GET", "POST")
+        .WithExposedHeaders("Location"));
 });
 
 var app = builder.Build();
